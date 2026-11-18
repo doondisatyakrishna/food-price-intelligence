@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, memo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef, memo } from 'react';
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -69,9 +69,194 @@ function getPhaseStyle(phase) {
 }
 
 /**
- * Memoized Recharts component: prevents expensive SVG chart re-renders
- * when dragging the "What-If" simulator sliders at 60 FPS.
+ * Isolated Simulator Component:
+ * Keeps slider dragging strictly inside local component state so the rest of
+ * the dashboard performs ZERO re-renders while gliding, and commits the
+ * calculation the moment the user lets go of the slider.
  */
+const WhatIfSimulator = memo(function WhatIfSimulator({
+  rainDeltaMm,
+  priceShockPct,
+  onCommitShock,
+}) {
+  const [draftRain, setDraftRain] = useState(rainDeltaMm);
+  const [draftPrice, setDraftPrice] = useState(priceShockPct);
+  const settleTimerRef = useRef(null);
+
+  useEffect(() => {
+    setDraftRain(rainDeltaMm);
+  }, [rainDeltaMm]);
+
+  useEffect(() => {
+    setDraftPrice(priceShockPct);
+  }, [priceShockPct]);
+
+  const flushCommit = useCallback(
+    (nextRain, nextPrice) => {
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+      onCommitShock(nextRain, nextPrice);
+    },
+    [onCommitShock]
+  );
+
+  // Fallback timer only in case keyboard or accessibility input is used without pointer release
+  const scheduleFallbackCommit = (nextRain, nextPrice) => {
+    if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = setTimeout(() => {
+      onCommitShock(nextRain, nextPrice);
+    }, 450);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+    };
+  }, []);
+
+  const hasChanges = draftRain !== 0 || draftPrice !== 0 || rainDeltaMm !== 0 || priceShockPct !== 0;
+
+  return (
+    <section className="glass-panel-mint" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.4rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.75rem',
+          marginBottom: '1rem',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+          <Sliders size={18} color="var(--emerald-primary)" />
+          <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-forest)' }}>
+            &ldquo;What-If&rdquo; Weather &amp; Supply Shock Simulator
+          </h3>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            (Drag and release either slider to recalculate 7d &amp; 14d ML predictions)
+          </span>
+        </div>
+
+        {hasChanges && (
+          <button
+            className="neo-button"
+            style={{ padding: '0.45rem 0.9rem', fontSize: '0.8rem' }}
+            onClick={() => {
+              setDraftRain(0);
+              setDraftPrice(0);
+              flushCommit(0, 0);
+            }}
+          >
+            <RotateCcw size={14} />
+            <span>Reset to Live Data</span>
+          </button>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gap: '1.4rem',
+        }}
+      >
+        <div className="neo-inset" style={{ padding: '0.95rem 1.15rem' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              marginBottom: '0.55rem',
+            }}
+          >
+            <span>21-Day Cumulative Rainfall Shock</span>
+            <span className="mono" style={{ color: 'var(--emerald-primary)' }}>
+              {draftRain >= 0 ? `+${draftRain}` : draftRain} mm
+            </span>
+          </div>
+          <input
+            type="range"
+            min="-50"
+            max="200"
+            step="1"
+            value={draftRain}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              setDraftRain(val);
+              scheduleFallbackCommit(val, draftPrice);
+            }}
+            onPointerUp={() => flushCommit(draftRain, draftPrice)}
+            onKeyUp={() => flushCommit(draftRain, draftPrice)}
+            className="neo-slider"
+          />
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontSize: '0.7rem',
+              color: 'var(--text-muted)',
+              marginTop: '0.4rem',
+            }}
+          >
+            <span>-50mm (Dry Spell)</span>
+            <span>0mm (Actual)</span>
+            <span>+200mm (Cyclone Rain)</span>
+          </div>
+        </div>
+
+        <div className="neo-inset" style={{ padding: '0.95rem 1.15rem' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              marginBottom: '0.55rem',
+            }}
+          >
+            <span>Immediate Mandi Price Shock</span>
+            <span className="mono" style={{ color: 'var(--emerald-primary)' }}>
+              {draftPrice >= 0 ? `+${draftPrice}` : draftPrice}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="-25"
+            max="40"
+            step="1"
+            value={draftPrice}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              setDraftPrice(val);
+              scheduleFallbackCommit(draftRain, val);
+            }}
+            onPointerUp={() => flushCommit(draftRain, draftPrice)}
+            onKeyUp={() => flushCommit(draftRain, draftPrice)}
+            className="neo-slider"
+          />
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              fontSize: '0.7rem',
+              color: 'var(--text-muted)',
+              marginTop: '0.4rem',
+            }}
+          >
+            <span>-25% (Bumper Glut)</span>
+            <span>0% (Actual)</span>
+            <span>+40% (Supply Crunch)</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+});
+
 const PriceTrajectoryChart = memo(function PriceTrajectoryChart({
   history,
   selectedRegion,
@@ -190,12 +375,10 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
   const [selectedWeatherHub, setSelectedWeatherHub] = useState('Coastal Andhra');
   const [historyLimit, setHistoryLimit] = useState(120);
 
-  // "What-If" Shock Simulator states
+  // Committed "What-If" Shock Simulator values (updated only when slider is released)
   const [rainDeltaMm, setRainDeltaMm] = useState(0);
   const [priceShockPct, setPriceShockPct] = useState(0);
 
-  // Baseline unsimulated price (used for 0ms instant slider feedback)
-  const [actualBasePrice, setActualBasePrice] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [isSimulating, setIsSimulating] = useState(false);
 
@@ -234,6 +417,11 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     }
   };
 
+  const handleCommitShock = useCallback((nextRain, nextPrice) => {
+    setRainDeltaMm(nextRain);
+    setPriceShockPct(nextPrice);
+  }, []);
+
   // Load historical series, mandi leaderboard, and surge alerts
   useEffect(() => {
     let active = true;
@@ -250,11 +438,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         ]);
 
         if (!active) return;
-        const rows = historyRes?.data || [];
-        setHistory(rows);
-        if (rows.length > 0) {
-          setActualBasePrice(Number(rows[rows.length - 1].median_modal_price));
-        }
+        setHistory(historyRes?.data || []);
         setMandisData(mandisRes);
         setAlerts(alertsRes?.alerts || []);
       } catch (err) {
@@ -270,39 +454,35 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     };
   }, [selectedRegion, selectedCommodity, historyLimit, syncCompletedAt, onTelemetry]);
 
-  // Debounced ML Forecast call (skips global telemetry updates during slider drags to avoid App re-renders)
+  // Run ML Forecast once whenever region, commodity, or released slider values change
   useEffect(() => {
     let active = true;
     const isWhatIf = rainDeltaMm !== 0 || priceShockPct !== 0;
     if (isWhatIf) setIsSimulating(true);
 
-    const timer = setTimeout(async () => {
-      try {
-        const forecastRes = await api.getForecast(
-          selectedRegion,
-          selectedCommodity,
-          isWhatIf ? null : onTelemetry,
-          { rain_21d_delta_mm: rainDeltaMm, price_shock_pct: priceShockPct }
-        );
-        if (!active) return;
-        setForecast(forecastRes);
-        if (!isWhatIf) {
-          setActualBasePrice(forecastRes.current_modal_price_inr);
-        }
-      } catch (err) {
+    api
+      .getForecast(
+        selectedRegion,
+        selectedCommodity,
+        isWhatIf ? null : onTelemetry,
+        { rain_21d_delta_mm: rainDeltaMm, price_shock_pct: priceShockPct }
+      )
+      .then((forecastRes) => {
+        if (active) setForecast(forecastRes);
+      })
+      .catch((err) => {
         if (active) setError(err.message || 'Forecast error.');
-      } finally {
+      })
+      .finally(() => {
         if (active) setIsSimulating(false);
-      }
-    }, isWhatIf ? 220 : 0);
+      });
 
     return () => {
       active = false;
-      clearTimeout(timer);
     };
   }, [selectedRegion, selectedCommodity, rainDeltaMm, priceShockPct, syncCompletedAt, onTelemetry]);
 
-  // Load External Open-Meteo 14-Day Weather Forecast for the selected Weather Zone
+  // Load External Open-Meteo 14-Day Weather Forecast
   useEffect(() => {
     let active = true;
     api
@@ -317,14 +497,6 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
       active = false;
     };
   }, [selectedWeatherHub, onTelemetry]);
-
-  // Instant 60-FPS client-side calculation for Base Price while dragging sliders
-  const instantDisplayBasePrice = useMemo(() => {
-    if (actualBasePrice !== null) {
-      return Number((actualBasePrice * (1 + priceShockPct / 100)).toFixed(2));
-    }
-    return forecast?.current_modal_price_inr ?? null;
-  }, [actualBasePrice, priceShockPct, forecast]);
 
   const isWhatIfActive = rainDeltaMm !== 0 || priceShockPct !== 0;
   const pred7d = forecast?.forecasts?.find((f) => f.horizon_days === 7);
@@ -490,7 +662,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         </div>
       )}
 
-      {/* 2. 4 Light Neo-Glass KPI Cards (Instant 60 FPS Base Price Feedback) */}
+      {/* 2. 4 Light Neo-Glass KPI Cards */}
       <section
         style={{
           display: 'grid',
@@ -523,11 +695,13 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
               fontWeight: 800,
               color: 'var(--text-forest)',
               margin: '0.4rem 0',
+              opacity: isSimulating ? 0.55 : 1,
+              transition: 'opacity 0.15s ease',
             }}
           >
-            {instantDisplayBasePrice === null
+            {!forecast
               ? '...'
-              : `₹${instantDisplayBasePrice.toLocaleString('en-IN')}`}
+              : `₹${forecast.current_modal_price_inr.toLocaleString('en-IN')}`}
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
             Per Quintal (100 kg) • {selectedRegion}
@@ -626,133 +800,15 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         </div>
       </section>
 
-      {/* 3. Interactive "What-If" Weather & Price Shock Simulator */}
-      <section className="glass-panel-mint" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.4rem' }}>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '0.75rem',
-            marginBottom: '1rem',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-            <Sliders size={18} color="var(--emerald-primary)" />
-            <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-forest)' }}>
-              &ldquo;What-If&rdquo; Weather &amp; Supply Shock Simulator
-            </h3>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              (Test how cyclones or sudden market spikes shift the 7d &amp; 14d ML predictions)
-            </span>
-          </div>
-
-          {isWhatIfActive && (
-            <button
-              className="neo-button"
-              style={{ padding: '0.45rem 0.9rem', fontSize: '0.8rem' }}
-              onClick={() => {
-                setRainDeltaMm(0);
-                setPriceShockPct(0);
-              }}
-            >
-              <RotateCcw size={14} />
-              <span>Reset to Live Data</span>
-            </button>
-          )}
-        </div>
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '1.4rem',
-          }}
-        >
-          <div className="neo-inset" style={{ padding: '0.95rem 1.15rem' }}>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                marginBottom: '0.5rem',
-              }}
-            >
-              <span>21-Day Cumulative Rainfall Shock</span>
-              <span className="mono" style={{ color: 'var(--emerald-primary)' }}>
-                {rainDeltaMm >= 0 ? `+${rainDeltaMm}` : rainDeltaMm} mm
-              </span>
-            </div>
-            <input
-              type="range"
-              min="-50"
-              max="200"
-              step="10"
-              value={rainDeltaMm}
-              onChange={(e) => setRainDeltaMm(Number(e.target.value))}
-              className="neo-slider"
-            />
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: '0.7rem',
-                color: 'var(--text-muted)',
-                marginTop: '0.35rem',
-              }}
-            >
-              <span>-50mm (Dry Spell)</span>
-              <span>0mm (Actual)</span>
-              <span>+200mm (Cyclone Rain)</span>
-            </div>
-          </div>
-
-          <div className="neo-inset" style={{ padding: '0.95rem 1.15rem' }}>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                marginBottom: '0.5rem',
-              }}
-            >
-              <span>Immediate Mandi Price Shock</span>
-              <span className="mono" style={{ color: 'var(--emerald-primary)' }}>
-                {priceShockPct >= 0 ? `+${priceShockPct}` : priceShockPct}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min="-25"
-              max="40"
-              step="1"
-              value={priceShockPct}
-              onChange={(e) => setPriceShockPct(Number(e.target.value))}
-              className="neo-slider"
-            />
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: '0.7rem',
-                color: 'var(--text-muted)',
-                marginTop: '0.35rem',
-              }}
-            >
-              <span>-25% (Bumper Glut)</span>
-              <span>0% (Actual)</span>
-              <span>+40% (Supply Crunch)</span>
-            </div>
-          </div>
-        </div>
-      </section>
+      {/* 3. Isolated 60-FPS What-If Simulator (Calculates on Release) */}
+      <WhatIfSimulator
+        rainDeltaMm={rainDeltaMm}
+        priceShockPct={priceShockPct}
+        onCommitShock={handleCommitShock}
+      />
 
       {/* 4. Balanced 2-Column Upper Analytics Deck */}
       <section className="analytics-split-grid">
-        {/* Left Column: Memoized Price Chart + 12-Month Seasonal Arrival Calendar */}
         <div className="analytics-col">
           <PriceTrajectoryChart
             history={history}
@@ -760,7 +816,6 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             selectedCommodity={selectedCommodity}
           />
 
-          {/* 12-Month Seasonal Harvest & Arrival Calendar Strip */}
           <div className="glass-panel" style={{ padding: '1.45rem 1.6rem', flex: 1 }}>
             <div
               style={{
@@ -821,7 +876,6 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
           </div>
         </div>
 
-        {/* Right Column: Standalone 14-Day Weather Outlook + Active Surge Alerts */}
         <div className="analytics-col">
           <div className="glass-panel" style={{ padding: '1.45rem' }}>
             <img
@@ -976,7 +1030,6 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             )}
           </div>
 
-          {/* Active Early-Warning Surge Alerts */}
           <div className="glass-panel" style={{ padding: '1.45rem', flex: 1 }}>
             <div
               style={{
