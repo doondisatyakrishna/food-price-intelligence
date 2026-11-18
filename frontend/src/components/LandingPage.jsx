@@ -294,6 +294,7 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
             Coastal Andhra, Rayalaseema, North &amp; South Telangana, Nashik, and Kolar.
           </p>
         </div>
+      
       </section>
 
       {/* 3. Historical Agricultural Events & Weather Shocks Timeline */}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, memo } from 'react';
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -28,7 +28,6 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 
-// Seasonal crop calendar profiles (Jan = 0 ... Dec = 11) for Indian Kharif/Rabi cycles
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const CROP_CALENDARS = {
@@ -69,6 +68,104 @@ function getPhaseStyle(phase) {
   return { bg: '#f0fdf4', color: '#166534', border: '#bbf7d0' };
 }
 
+/**
+ * Memoized Recharts component: prevents expensive SVG chart re-renders
+ * when dragging the "What-If" simulator sliders at 60 FPS.
+ */
+const PriceTrajectoryChart = memo(function PriceTrajectoryChart({
+  history,
+  selectedRegion,
+  selectedCommodity,
+}) {
+  return (
+    <div className="glass-panel" style={{ padding: '1.55rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.75rem',
+          marginBottom: '1.1rem',
+        }}
+      >
+        <div>
+          <h2 style={{ fontSize: '1.16rem', fontWeight: 800, color: 'var(--text-forest)' }}>
+            {selectedRegion} — {selectedCommodity} Price &amp; Rainfall Trajectory
+          </h2>
+          <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+            Median Modal Price (₹/Qtl) vs. 30-Day Moving Average &amp; Daily Precipitation (mm)
+          </p>
+        </div>
+        <div className="badge-pill badge-normal">
+          <Activity size={13} /> {history.length} Trading Days
+        </div>
+      </div>
+
+      <div style={{ width: '100%', height: 355 }}>
+        <ResponsiveContainer>
+          <ComposedChart data={history} margin={{ top: 10, right: 15, left: 0, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(6, 55, 38, 0.1)" />
+            <XAxis
+              dataKey="date"
+              tick={{ fill: '#52796a', fontSize: 11, fontWeight: 600 }}
+              minTickGap={32}
+            />
+            <YAxis
+              yAxisId="price"
+              tick={{ fill: '#065f46', fontSize: 11, fontWeight: 700 }}
+              tickFormatter={(val) => `₹${val}`}
+            />
+            <YAxis
+              yAxisId="rain"
+              orientation="right"
+              tick={{ fill: '#0284c7', fontSize: 11, fontWeight: 600 }}
+              tickFormatter={(val) => `${val}mm`}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: 'rgba(255, 255, 255, 0.96)',
+                border: '1px solid #6ee7b7',
+                borderRadius: '14px',
+                color: '#063726',
+                boxShadow: '0 10px 25px rgba(6, 55, 38, 0.12)',
+              }}
+            />
+            <Legend />
+            <Bar
+              yAxisId="rain"
+              dataKey="precipitation_mm"
+              name="Rainfall (mm)"
+              fill="rgba(14, 165, 233, 0.35)"
+              barSize={6}
+            />
+            <Line
+              yAxisId="price"
+              type="monotone"
+              dataKey="price_ma_30d"
+              name="30d Moving Avg (₹)"
+              stroke="#d97706"
+              strokeWidth={2.2}
+              dot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="price"
+              type="monotone"
+              dataKey="median_modal_price"
+              name="Modal Price (₹/Qtl)"
+              stroke="#059669"
+              strokeWidth={2.8}
+              dot={false}
+              isAnimationActive={false}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+});
+
 export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt }) {
   const regions = useMemo(
     () => catalog?.regions || ['Andhra Pradesh', 'Telangana', 'Nashik', 'Kolar'],
@@ -93,11 +190,15 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
   const [selectedWeatherHub, setSelectedWeatherHub] = useState('Coastal Andhra');
   const [historyLimit, setHistoryLimit] = useState(120);
 
-  // "What-If" Shock Simulator state
+  // "What-If" Shock Simulator states
   const [rainDeltaMm, setRainDeltaMm] = useState(0);
   const [priceShockPct, setPriceShockPct] = useState(0);
 
+  // Baseline unsimulated price (used for 0ms instant slider feedback)
+  const [actualBasePrice, setActualBasePrice] = useState(null);
   const [forecast, setForecast] = useState(null);
+  const [isSimulating, setIsSimulating] = useState(false);
+
   const [history, setHistory] = useState([]);
   const [mandisData, setMandisData] = useState(null);
   const [weather, setWeather] = useState(null);
@@ -113,7 +214,6 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     return filtered.length > 0 ? filtered : ['Tomato'];
   }, [catalog, selectedRegion]);
 
-  // Keep selectedCommodity valid and auto-align default sub-regional weather hub when region changes
   useEffect(() => {
     if (availableCommodities.length > 0 && !availableCommodities.includes(selectedCommodity)) {
       setSelectedCommodity(availableCommodities[0]);
@@ -150,7 +250,11 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         ]);
 
         if (!active) return;
-        setHistory(historyRes?.data || []);
+        const rows = historyRes?.data || [];
+        setHistory(rows);
+        if (rows.length > 0) {
+          setActualBasePrice(Number(rows[rows.length - 1].median_modal_price));
+        }
         setMandisData(mandisRes);
         setAlerts(alertsRes?.alerts || []);
       } catch (err) {
@@ -166,22 +270,31 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     };
   }, [selectedRegion, selectedCommodity, historyLimit, syncCompletedAt, onTelemetry]);
 
-  // Load ML Forecast separately so "What-If" sliders update predictions rapidly without reloading charts
+  // Debounced ML Forecast call (skips global telemetry updates during slider drags to avoid App re-renders)
   useEffect(() => {
     let active = true;
+    const isWhatIf = rainDeltaMm !== 0 || priceShockPct !== 0;
+    if (isWhatIf) setIsSimulating(true);
+
     const timer = setTimeout(async () => {
       try {
         const forecastRes = await api.getForecast(
           selectedRegion,
           selectedCommodity,
-          onTelemetry,
+          isWhatIf ? null : onTelemetry,
           { rain_21d_delta_mm: rainDeltaMm, price_shock_pct: priceShockPct }
         );
-        if (active) setForecast(forecastRes);
+        if (!active) return;
+        setForecast(forecastRes);
+        if (!isWhatIf) {
+          setActualBasePrice(forecastRes.current_modal_price_inr);
+        }
       } catch (err) {
         if (active) setError(err.message || 'Forecast error.');
+      } finally {
+        if (active) setIsSimulating(false);
       }
-    }, 120);
+    }, isWhatIf ? 220 : 0);
 
     return () => {
       active = false;
@@ -189,7 +302,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     };
   }, [selectedRegion, selectedCommodity, rainDeltaMm, priceShockPct, syncCompletedAt, onTelemetry]);
 
-  // Load External Open-Meteo 14-Day Weather Forecast for the explicitly chosen Weather Zone
+  // Load External Open-Meteo 14-Day Weather Forecast for the selected Weather Zone
   useEffect(() => {
     let active = true;
     api
@@ -205,6 +318,15 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     };
   }, [selectedWeatherHub, onTelemetry]);
 
+  // Instant 60-FPS client-side calculation for Base Price while dragging sliders
+  const instantDisplayBasePrice = useMemo(() => {
+    if (actualBasePrice !== null) {
+      return Number((actualBasePrice * (1 + priceShockPct / 100)).toFixed(2));
+    }
+    return forecast?.current_modal_price_inr ?? null;
+  }, [actualBasePrice, priceShockPct, forecast]);
+
+  const isWhatIfActive = rainDeltaMm !== 0 || priceShockPct !== 0;
   const pred7d = forecast?.forecasts?.find((f) => f.horizon_days === 7);
   const pred14d = forecast?.forecasts?.find((f) => f.horizon_days === 14);
 
@@ -368,7 +490,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         </div>
       )}
 
-      {/* 2. 4 Light Neo-Glass KPI Cards */}
+      {/* 2. 4 Light Neo-Glass KPI Cards (Instant 60 FPS Base Price Feedback) */}
       <section
         style={{
           display: 'grid',
@@ -378,15 +500,21 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         }}
       >
         <div className="glass-panel" style={{ padding: '1.35rem 1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 22 }}>
             <span style={{ fontSize: '0.76rem', color: 'var(--emerald-primary)', fontWeight: 800 }}>
-              {forecast?.is_simulated ? 'SIMULATED BASE PRICE' : 'CURRENT MODAL PRICE'}
+              {isWhatIfActive ? 'SIMULATED BASE PRICE' : 'CURRENT MODAL PRICE'}
             </span>
-            {forecast?.is_simulated && (
-              <span className="badge-pill badge-watch" style={{ fontSize: '0.65rem', padding: '0.2rem 0.55rem' }}>
-                WHAT-IF
-              </span>
-            )}
+            <span
+              className="badge-pill badge-watch"
+              style={{
+                fontSize: '0.65rem',
+                padding: '0.18rem 0.55rem',
+                opacity: isWhatIfActive ? 1 : 0,
+                transition: 'opacity 0.15s ease',
+              }}
+            >
+              WHAT-IF
+            </span>
           </div>
           <div
             className="mono"
@@ -397,9 +525,9 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
               margin: '0.4rem 0',
             }}
           >
-            {loading || !forecast
+            {instantDisplayBasePrice === null
               ? '...'
-              : `₹${forecast.current_modal_price_inr.toLocaleString('en-IN')}`}
+              : `₹${instantDisplayBasePrice.toLocaleString('en-IN')}`}
           </div>
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
             Per Quintal (100 kg) • {selectedRegion}
@@ -417,11 +545,11 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
               fontWeight: 800,
               color: 'var(--text-forest)',
               margin: '0.4rem 0',
+              opacity: isSimulating ? 0.55 : 1,
+              transition: 'opacity 0.15s ease',
             }}
           >
-            {loading || !pred7d
-              ? '...'
-              : `₹${pred7d.predicted_price_inr.toLocaleString('en-IN')}`}
+            {!pred7d ? '...' : `₹${pred7d.predicted_price_inr.toLocaleString('en-IN')}`}
           </div>
           {pred7d && (
             <div
@@ -454,11 +582,11 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
               fontWeight: 800,
               color: 'var(--text-forest)',
               margin: '0.4rem 0',
+              opacity: isSimulating ? 0.55 : 1,
+              transition: 'opacity 0.15s ease',
             }}
           >
-            {loading || !pred14d
-              ? '...'
-              : `₹${pred14d.predicted_price_inr.toLocaleString('en-IN')}`}
+            {!pred14d ? '...' : `₹${pred14d.predicted_price_inr.toLocaleString('en-IN')}`}
           </div>
           {pred14d && (
             <div
@@ -520,7 +648,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             </span>
           </div>
 
-          {(rainDeltaMm !== 0 || priceShockPct !== 0) && (
+          {isWhatIfActive && (
             <button
               className="neo-button"
               style={{ padding: '0.45rem 0.9rem', fontSize: '0.8rem' }}
@@ -600,7 +728,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
               type="range"
               min="-25"
               max="40"
-              step="5"
+              step="1"
               value={priceShockPct}
               onChange={(e) => setPriceShockPct(Number(e.target.value))}
               className="neo-slider"
@@ -622,104 +750,18 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         </div>
       </section>
 
-      {/* 4. Main Split Deck */}
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-          gap: '1.4rem',
-          alignItems: 'start',
-        }}
-      >
-        {/* Left Column (Spans 2): Price Chart + Seasonal Calendar + Mandi Leaderboard */}
-        <div style={{ gridColumn: 'span 2', display: 'flex', flexDirection: 'column', gap: '1.4rem' }}>
-          {/* Historical Chart */}
-          <div className="glass-panel" style={{ padding: '1.6rem' }}>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '0.75rem',
-                marginBottom: '1.2rem',
-              }}
-            >
-              <div>
-                <h2 style={{ fontSize: '1.18rem', fontWeight: 800, color: 'var(--text-forest)' }}>
-                  {selectedRegion} — {selectedCommodity} Price &amp; Rainfall Trajectory
-                </h2>
-                <p style={{ fontSize: '0.83rem', color: 'var(--text-muted)' }}>
-                  Median Modal Price (₹/Qtl) vs. 30-Day Moving Average &amp; Daily Precipitation (mm)
-                </p>
-              </div>
-              <div className="badge-pill badge-normal">
-                <Activity size={13} /> {history.length} Trading Days
-              </div>
-            </div>
-
-            <div style={{ width: '100%', height: 350 }}>
-              <ResponsiveContainer>
-                <ComposedChart data={history} margin={{ top: 10, right: 15, left: 0, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(6, 55, 38, 0.1)" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fill: '#52796a', fontSize: 11, fontWeight: 600 }}
-                    minTickGap={32}
-                  />
-                  <YAxis
-                    yAxisId="price"
-                    tick={{ fill: '#065f46', fontSize: 11, fontWeight: 700 }}
-                    tickFormatter={(val) => `₹${val}`}
-                  />
-                  <YAxis
-                    yAxisId="rain"
-                    orientation="right"
-                    tick={{ fill: '#0284c7', fontSize: 11, fontWeight: 600 }}
-                    tickFormatter={(val) => `${val}mm`}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.96)',
-                      border: '1px solid #6ee7b7',
-                      borderRadius: '14px',
-                      color: '#063726',
-                      boxShadow: '0 10px 25px rgba(6, 55, 38, 0.12)',
-                    }}
-                  />
-                  <Legend />
-                  <Bar
-                    yAxisId="rain"
-                    dataKey="precipitation_mm"
-                    name="Rainfall (mm)"
-                    fill="rgba(14, 165, 233, 0.35)"
-                    barSize={6}
-                  />
-                  <Line
-                    yAxisId="price"
-                    type="monotone"
-                    dataKey="price_ma_30d"
-                    name="30d Moving Avg (₹)"
-                    stroke="#d97706"
-                    strokeWidth={2.2}
-                    dot={false}
-                  />
-                  <Line
-                    yAxisId="price"
-                    type="monotone"
-                    dataKey="median_modal_price"
-                    name="Modal Price (₹/Qtl)"
-                    stroke="#059669"
-                    strokeWidth={2.8}
-                    dot={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+      {/* 4. Balanced 2-Column Upper Analytics Deck */}
+      <section className="analytics-split-grid">
+        {/* Left Column: Memoized Price Chart + 12-Month Seasonal Arrival Calendar */}
+        <div className="analytics-col">
+          <PriceTrajectoryChart
+            history={history}
+            selectedRegion={selectedRegion}
+            selectedCommodity={selectedCommodity}
+          />
 
           {/* 12-Month Seasonal Harvest & Arrival Calendar Strip */}
-          <div className="glass-panel" style={{ padding: '1.45rem 1.6rem' }}>
+          <div className="glass-panel" style={{ padding: '1.45rem 1.6rem', flex: 1 }}>
             <div
               style={{
                 display: 'flex',
@@ -736,16 +778,16 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
                   12-Month Seasonal Harvest &amp; Arrival Cycle — {selectedCommodity}
                 </h3>
               </div>
-              <span style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-                Explains seasonal ML drivers (sin/cos day-of-year)
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                Seasonal drivers (sin/cos day-of-year)
               </span>
             </div>
 
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))',
-                gap: '0.5rem',
+                gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+                gap: '0.55rem',
               }}
             >
               {MONTHS.map((mName, idx) => {
@@ -761,7 +803,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
                       color: st.color,
                       border: isCurrent ? '2px solid #059669' : `1px solid ${st.border}`,
                       borderRadius: '12px',
-                      padding: '0.55rem 0.45rem',
+                      padding: '0.6rem 0.45rem',
                       textAlign: 'center',
                       boxShadow: isCurrent ? '0 4px 12px rgba(5, 150, 105, 0.25)' : 'none',
                     }}
@@ -769,7 +811,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
                     <div className="mono" style={{ fontWeight: 800, fontSize: '0.78rem' }}>
                       {mName} {isCurrent ? '•' : ''}
                     </div>
-                    <div style={{ fontSize: '0.66rem', fontWeight: 700, marginTop: '0.2rem', lineHeight: 1.25 }}>
+                    <div style={{ fontSize: '0.66rem', fontWeight: 700, marginTop: '0.22rem', lineHeight: 1.25 }}>
                       {phase}
                     </div>
                   </div>
@@ -777,103 +819,32 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
               })}
             </div>
           </div>
-
-          {/* Live District & Mandi Price Leaderboard ("Where to Sell Today") */}
-          <div className="glass-panel" style={{ padding: '1.5rem 1.6rem' }}>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '0.75rem',
-                marginBottom: '1rem',
-              }}
-            >
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
-                  <Store size={19} color="var(--emerald-primary)" />
-                  <h3 style={{ fontSize: '1.08rem', fontWeight: 800, color: 'var(--text-forest)' }}>
-                    District &amp; Mandi Price Leaderboard ({selectedRegion} • {selectedCommodity})
-                  </h3>
-                </div>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                  Individual APMC realizations on latest reporting date ({mandisData?.latest_date || 'N/A'})
-                </p>
-              </div>
-
-              {mandisData?.spread_inr > 0 && (
-                <div className="badge-pill badge-watch">
-                  Mandi Spread: ₹{mandisData.spread_inr.toLocaleString('en-IN')}/Qtl
-                </div>
-              )}
-            </div>
-
-            {!mandisData || mandisData.mandis?.length === 0 ? (
-              <div className="neo-inset" style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                No individual APMC breakdown available for this selection.
-              </div>
-            ) : (
-              <div className="neo-inset" style={{ overflowX: 'auto', padding: '0.35rem' }}>
-                <table className="mandi-table">
-                  <thead>
-                    <tr>
-                      <th>Rank</th>
-                      <th>APMC Mandi</th>
-                      <th>District</th>
-                      <th>Min (₹/Qtl)</th>
-                      <th>Max (₹/Qtl)</th>
-                      <th>Modal Price</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mandisData.mandis.slice(0, 10).map((m, idx) => (
-                      <tr key={`${m.market_name}-${m.district}`}>
-                        <td className="mono" style={{ fontWeight: 800, color: 'var(--emerald-primary)' }}>
-                          #{idx + 1}
-                        </td>
-                        <td style={{ fontWeight: 700, color: 'var(--text-forest)' }}>{m.market_name}</td>
-                        <td>{m.district}</td>
-                        <td className="mono">₹{Number(m.min_price_inr).toLocaleString('en-IN')}</td>
-                        <td className="mono">₹{Number(m.max_price_inr).toLocaleString('en-IN')}</td>
-                        <td className="mono" style={{ fontWeight: 800, color: '#059669' }}>
-                          ₹{Number(m.modal_price_inr).toLocaleString('en-IN')}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
         </div>
 
-        {/* Right Column: Sub-Regional 14-Day Weather Outlook + Active Surge Alerts */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.4rem' }}>
-          {/* Standalone 14-Day Weather Outlook with Explicit Location Selector */}
+        {/* Right Column: Standalone 14-Day Weather Outlook + Active Surge Alerts */}
+        <div className="analytics-col">
           <div className="glass-panel" style={{ padding: '1.45rem' }}>
             <img
               src="/images/greenery-harvest.jpg"
               alt="Lush green agricultural expanse without humans"
               style={{
                 width: '100%',
-                height: 100,
+                height: 88,
                 objectFit: 'cover',
                 borderRadius: '14px',
-                marginBottom: '1rem',
+                marginBottom: '0.9rem',
                 border: '1px solid rgba(16, 185, 129, 0.28)',
               }}
             />
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '0.65rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '0.6rem' }}>
               <ThermometerSun size={20} color="var(--emerald-primary)" />
               <h3 style={{ fontSize: '1.05rem', fontWeight: 800 }}>
                 14-Day Meteorological Outlook
               </h3>
             </div>
 
-            {/* Explicit Sub-Regional Weather Location Selector */}
-            <div style={{ marginBottom: '0.85rem' }}>
+            <div style={{ marginBottom: '0.8rem' }}>
               <label
                 style={{
                   display: 'flex',
@@ -890,7 +861,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
               </label>
               <select
                 className="neo-select"
-                style={{ width: '100%', fontSize: '0.84rem', padding: '0.58rem 2.2rem 0.58rem 0.85rem' }}
+                style={{ width: '100%', fontSize: '0.84rem', padding: '0.55rem 2.2rem 0.55rem 0.85rem' }}
                 value={selectedWeatherHub}
                 onChange={(e) => setSelectedWeatherHub(e.target.value)}
               >
@@ -904,52 +875,47 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
 
             {weather ? (
               <>
-                {/* Exact Location & Coordinates Pill */}
                 <div
                   className="neo-inset"
                   style={{
-                    padding: '0.65rem 0.85rem',
-                    marginBottom: '0.85rem',
-                    fontSize: '0.76rem',
+                    padding: '0.6rem 0.85rem',
+                    marginBottom: '0.8rem',
+                    fontSize: '0.75rem',
                     lineHeight: 1.45,
                   }}
                 >
                   <div style={{ fontWeight: 700, color: 'var(--text-forest)' }}>
                     Covering: {weather.districts_covered}
                   </div>
-                  <div className="mono" style={{ color: 'var(--text-muted)', fontSize: '0.71rem', marginTop: '0.2rem' }}>
+                  <div className="mono" style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '0.15rem' }}>
                     Coords: {weather.coordinates?.lat}°N, {weather.coordinates?.lon}°E
                   </div>
                 </div>
-
-                <p style={{ fontSize: '0.84rem', color: 'var(--text-body)', marginBottom: '0.9rem', lineHeight: 1.5 }}>
-                  {weather.outlook_summary}
-                </p>
 
                 <div
                   style={{
                     display: 'grid',
                     gridTemplateColumns: '1fr 1fr',
-                    gap: '0.75rem',
-                    marginBottom: '0.9rem',
+                    gap: '0.7rem',
+                    marginBottom: '0.8rem',
                   }}
                 >
-                  <div className="neo-inset" style={{ padding: '0.72rem' }}>
-                    <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 700 }}>
+                  <div className="neo-inset" style={{ padding: '0.68rem' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>
                       14-DAY EXPECTED RAIN
                     </div>
-                    <div className="mono" style={{ fontSize: '1.12rem', fontWeight: 800 }}>
+                    <div className="mono" style={{ fontSize: '1.1rem', fontWeight: 800 }}>
                       {weather.total_expected_rain_mm} mm
                     </div>
                   </div>
-                  <div className="neo-inset" style={{ padding: '0.72rem' }}>
-                    <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 700 }}>
+                  <div className="neo-inset" style={{ padding: '0.68rem' }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>
                       HEAVY RAIN (&ge;25mm)
                     </div>
                     <div
                       className="mono"
                       style={{
-                        fontSize: '1.12rem',
+                        fontSize: '1.1rem',
                         fontWeight: 800,
                         color: weather.heavy_rain_days_count > 0 ? '#d97706' : '#059669',
                       }}
@@ -959,17 +925,17 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', marginBottom: '0.75rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '0.7rem' }}>
                   {weather.daily?.slice(0, 5).map((d) => (
                     <div
                       key={d.date}
                       className="neo-inset"
                       style={{
-                        padding: '0.5rem 0.85rem',
+                        padding: '0.48rem 0.85rem',
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
-                        fontSize: '0.8rem',
+                        fontSize: '0.79rem',
                         fontWeight: 600,
                       }}
                     >
@@ -1000,7 +966,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
                   }}
                 >
                   <ExternalLink size={12} />
-                  <span>External forecast via Open-Meteo Meteorological API</span>
+                  <span>External forecast via Open-Meteo API</span>
                 </div>
               </>
             ) : (
@@ -1010,38 +976,14 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             )}
           </div>
 
-          {/* Pure Greenery Agro-Climatic Context Card (Zero Humans) */}
-          <div className="glass-panel-mint" style={{ padding: '1.25rem' }}>
-            <img
-              src="/images/greenery-sprouts.jpg"
-              alt="Fresh green crops with zero humans"
-              style={{
-                width: '100%',
-                height: 95,
-                objectFit: 'cover',
-                borderRadius: '12px',
-                marginBottom: '0.85rem',
-                border: '1px solid rgba(16, 185, 129, 0.28)',
-              }}
-            />
-            <div style={{ fontWeight: 800, fontSize: '0.92rem', color: 'var(--text-forest)', marginBottom: '0.3rem' }}>
-              Why Weather &amp; Price Models Stay Separate
-            </div>
-            <p style={{ fontSize: '0.8rem', lineHeight: 1.55, color: 'var(--text-body)' }}>
-              Our ML price models rely strictly on <strong>observed historical rainfall</strong>{' '}
-              (up to 21-day lags), while the 14-day outlook above comes directly from Open-Meteo
-              so weather forecast errors never compound into price predictions.
-            </p>
-          </div>
-
           {/* Active Early-Warning Surge Alerts */}
-          <div className="glass-panel" style={{ padding: '1.45rem' }}>
+          <div className="glass-panel" style={{ padding: '1.45rem', flex: 1 }}>
             <div
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                marginBottom: '0.9rem',
+                marginBottom: '0.85rem',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
@@ -1056,13 +998,13 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             {alerts.length === 0 ? (
               <div
                 className="neo-inset"
-                style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--text-body)' }}
+                style={{ padding: '1rem', fontSize: '0.84rem', color: 'var(--text-body)', lineHeight: 1.5 }}
               >
                 All tracked commodities are currently within normal 30-day volatility bands.
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                {alerts.slice(0, 5).map((item) => (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {alerts.slice(0, 4).map((item) => (
                   <div
                     key={`${item.region_name}-${item.commodity}`}
                     onClick={() => {
@@ -1071,7 +1013,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
                     }}
                     className="neo-inset"
                     style={{
-                      padding: '0.75rem 0.95rem',
+                      padding: '0.7rem 0.9rem',
                       cursor: 'pointer',
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -1079,13 +1021,13 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--text-forest)' }}>
+                      <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--text-forest)' }}>
                         {item.commodity}{' '}
                         <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>
                           ({item.region_name})
                         </span>
                       </div>
-                      <div className="mono" style={{ fontSize: '0.78rem', color: 'var(--emerald-primary)', fontWeight: 700 }}>
+                      <div className="mono" style={{ fontSize: '0.76rem', color: 'var(--emerald-primary)', fontWeight: 700 }}>
                         ₹{Number(item.median_modal_price).toLocaleString('en-IN')}/Qtl • Z=
                         {item.price_zscore_30d}σ
                       </div>
@@ -1097,6 +1039,95 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             )}
           </div>
         </div>
+      </section>
+
+      {/* 5. Full-Width Horizontal District & Mandi Price Leaderboard */}
+      <section className="glass-panel" style={{ padding: '1.6rem 1.8rem' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '0.75rem',
+            marginBottom: '1.1rem',
+          }}
+        >
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+              <Store size={20} color="var(--emerald-primary)" />
+              <h3 style={{ fontSize: '1.14rem', fontWeight: 800, color: 'var(--text-forest)' }}>
+                District &amp; Mandi Price Leaderboard ({selectedRegion} • {selectedCommodity})
+              </h3>
+            </div>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+              Individual APMC realizations on latest reporting date ({mandisData?.latest_date || 'N/A'}) •{' '}
+              {mandisData?.mandi_count || 0} active markets reporting
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            {mandisData?.spread_inr > 0 && (
+              <div className="badge-pill badge-watch">
+                Inter-Mandi Spread: ₹{mandisData.spread_inr.toLocaleString('en-IN')}/Qtl
+              </div>
+            )}
+          </div>
+        </div>
+
+        {!mandisData || mandisData.mandis?.length === 0 ? (
+          <div className="neo-inset" style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            No individual APMC breakdown available for this selection.
+          </div>
+        ) : (
+          <div className="neo-inset" style={{ overflowX: 'auto', padding: '0.5rem' }}>
+            <table className="mandi-table">
+              <thead>
+                <tr>
+                  <th style={{ width: '70px' }}>Rank</th>
+                  <th>APMC Mandi</th>
+                  <th>District</th>
+                  <th>Min (₹/Qtl)</th>
+                  <th>Max (₹/Qtl)</th>
+                  <th>Intraday Position</th>
+                  <th style={{ textAlign: 'right' }}>Modal Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mandisData.mandis.slice(0, 12).map((m, idx) => {
+                  const minP = Number(m.min_price_inr);
+                  const maxP = Number(m.max_price_inr);
+                  const modP = Number(m.modal_price_inr);
+                  const pctPos =
+                    maxP > minP ? Math.min(95, Math.max(5, ((modP - minP) / (maxP - minP)) * 100)) : 50;
+
+                  return (
+                    <tr key={`${m.market_name}-${m.district}`}>
+                      <td className="mono" style={{ fontWeight: 800, color: 'var(--emerald-primary)' }}>
+                        #{idx + 1}
+                      </td>
+                      <td style={{ fontWeight: 700, color: 'var(--text-forest)' }}>{m.market_name}</td>
+                      <td style={{ fontWeight: 600 }}>{m.district}</td>
+                      <td className="mono">₹{minP.toLocaleString('en-IN')}</td>
+                      <td className="mono">₹{maxP.toLocaleString('en-IN')}</td>
+                      <td>
+                        <div className="range-track" title={`Modal ₹${modP} within ₹${minP}–₹${maxP}`}>
+                          <div className="range-dot" style={{ left: `${pctPos}%` }} />
+                        </div>
+                      </td>
+                      <td
+                        className="mono"
+                        style={{ textAlign: 'right', fontWeight: 800, color: '#059669', fontSize: '0.92rem' }}
+                      >
+                        ₹{modP.toLocaleString('en-IN')}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </main>
   );
