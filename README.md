@@ -61,3 +61,94 @@ food-price-intelligence/
 ├── notebooks/             # Exploratory Data Analysis (EDA) notebooks
 ├── render.yaml            # Render Blueprint for single-service deployment
 └── README.md
+```
+
+---
+
+## Local Setup & Development
+
+### 1. Prerequisites
+- Python 3.11+
+- Node.js 18+ and npm
+- A free API key from [data.gov.in](https://data.gov.in/)
+
+### 2. Backend Setup
+```bash
+# Create and activate virtual environment
+python -m venv .venv
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+# Linux / macOS:
+source .venv/bin/activate
+
+# Install Python dependencies
+pip install -r backend/requirements.txt
+```
+
+Create a `.env` file in the project root:
+```env
+DATA_GOV_API_KEY="your_data_gov_api_key_here"
+```
+
+Start the multi-worker backend:
+```bash
+# On Windows (runs Round-Robin Load Balancer on :8000 across workers :8001 & :8002):
+python backend/load_balancer.py
+
+# On Linux / macOS:
+uvicorn backend.api:app --host 127.0.0.1 --port 8000 --workers 2
+```
+
+### 3. Frontend Setup (Development Mode)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open **`http://localhost:5173`** in your browser. Vite automatically proxies `/api/*` and `/health` requests to `[http://127.0.0.1:8000](http://127.0.0.1:8000)`.
+
+### 4. Bi-Weekly (14-Day) Database Update & Retraining
+```bash
+# 1. Sync latest AP, Telangana, Nashik & Kolar prices + weather and rebuild features
+python backend/sync.py
+
+# 2. Flush SQLite WAL journal into the main .db file
+python -c "import sqlite3; c = sqlite3.connect('data/food_price_intelligence.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE);'); c.close()"
+
+# 3. (Optional) Retrain 7-day and 14-day HistGradientBoosting models
+python backend/train.py
+
+# 4. Push updated database snapshot to GitHub
+git add data/food_price_intelligence.db models/
+git commit -m "Bi-weekly sync: update AP & Telangana mandi records"
+git push origin main
+```
+
+---
+
+## Zero-Cost Deployment on Render
+
+This repository includes a `render.yaml` Blueprint configured to deploy both the React static bundle and the multi-worker FastAPI server inside **one free Render Web Service**:
+
+1. Push this repository to GitHub.
+2. Log in to [Render](https://render.com/) and select **New + → Blueprint**.
+3. Connect your GitHub repository (`food-price-intelligence`).
+4. When prompted for `DATA_GOV_API_KEY`, enter your `data.gov.in` key and click **Apply**.
+
+> **Note on Ephemeral Disk Persistence:** Render's free tier resets local disk writes after 15 minutes of inactivity. On every startup, `backend/api.py` automatically runs a background catch-up sync from the database watermark committed in Git. Running `python backend/sync.py` locally roughly once every 2 weeks and pushing `data/food_price_intelligence.db` keeps your historical baseline continuous inside `data.gov.in`'s rolling archive window.
+
+---
+
+## REST API Reference
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Returns server status, worker PID, model readiness, and sync state |
+| `GET` | `/api/catalog` | Returns tracked regions, commodities, date ranges, weather hubs, and ML metrics |
+| `GET` | `/api/alerts` | Returns active `CRITICAL_SURGE` and `WATCH` alerts across all series |
+| `GET` | `/api/history` | Returns time-series modal prices, moving averages, Z-scores, and rainfall |
+| `GET` | `/api/mandis` | Returns individual APMC mandi rankings and inter-mandi price spread for the latest date |
+| `GET` | `/api/weather-forecast` | Fetches external 14-day Open-Meteo forecast for a selected agro-climatic hub |
+| `POST` | `/api/forecast` | Generates 7-day & 14-day ML price forecasts (supports `What-If` shock parameters) |
+| `POST` | `/api/sync` | Triggers a cooldown-protected background catch-up sync |
+| `GET` | `/api/sync/status` | Polls live background sync progress and cooldown timer |
