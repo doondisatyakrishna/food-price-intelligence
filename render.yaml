@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: agropulse-india
+    runtime: python
+    plan: free
+    # 1. Install Python backend packages, then build the React static bundle
+    buildCommand: |
+      pip install -r backend/requirements.txt
+      cd frontend && npm install && npm run build
+    # 2. Run 2 parallel Uvicorn workers on Render's assigned $PORT (Linux supports --workers natively)
+    startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT --workers 2
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Setting sync: false prompts you to paste your DATA_GOV_API_KEY securely in Render's UI
+      - key: DATA_GOV_API_KEY
+        sync: false

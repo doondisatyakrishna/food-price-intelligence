@@ -1,0 +1,203 @@
+from pathlib import Path
+import sqlite3
+import numpy as np
+import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = PROJECT_ROOT / "data" / "food_price_intelligence.db"
+
+# 30 trading days (~6 weeks) allows recent data.gov.in series (like Telangana) to qualify
+MIN_TRADING_DAYS = 30
+
+
+def load_and_clean_raw_data(db_path: Path):
+  """Loads normalized SQLite tables, removes anomalies, and deduplicates weather."""
+  conn = sqlite3.connect(db_path)
+
+  prices_sql = """
+    SELECT 
+        dp.date,
+        m.state,
+        m.district,
+        m.name AS market_name,
+        c.name AS commodity,
+        dp.min_price_inr,
+        dp.max_price_inr,
+        dp.modal_price_inr
+    FROM daily_prices dp
+    JOIN markets m ON dp.market_id = m.id
+    JOIN commodities c ON dp.commodity_id = c.id
+    WHERE dp.modal_price_inr > 0
+    """
+  df_prices = pd.read_sql_query(prices_sql, conn, parse_dates=["date"])
+  df_weather = pd.read_sql_query(
+      "SELECT * FROM weather_data", conn, parse_dates=["date"]
+  )
+  conn.close()
+
+  # Deduplicate weather snapshots per region and date
+  df_weather = (
+      df_weather.sort_values("date")
+      .drop_duplicates(subset=["region_name", "date"], keep="last")
+      .copy()
+  )
+
+  # Group both Telugu states at the state level to match weather_data.region_name,
+  # while keeping standalone hubs (Nashik, Kolar) at the district level
+  df_prices["region_name"] = np.where(
+      df_prices["state"].isin(["Andhra Pradesh", "Telangana"]),
+      df_prices["state"],
+      df_prices["district"],
+  )
+
+  daily_prices = (
+      df_prices.groupby(["region_name", "commodity", "date"])
+      .agg(
+          mandi_count=("market_name", "nunique"),
+          median_modal_price=("modal_price_inr", "median"),
+          mean_modal_price=("modal_price_inr", "mean"),
+          min_price=("min_price_inr", "min"),
+          max_price=("max_price_inr", "max"),
+      )
+      .reset_index()
+  )
+
+  return daily_prices, df_weather
+
+
+def engineer_series_features(
+    price_group: pd.DataFrame, weather_region: pd.DataFrame
+) -> pd.DataFrame:
+  """Aligns a single (region, commodity) series onto a continuous daily calendar
+
+  and computes price momentum, early-warning Z-scores, weather lags, and ML
+  targets.
+  """
+  price_group = price_group.sort_values("date").copy()
+
+  full_dates = pd.date_range(
+      start=price_group["date"].min(),
+      end=price_group["date"].max(),
+      freq="D",
+  )
+  calendar_df = pd.DataFrame({"date": full_dates})
+  merged = pd.merge(calendar_df, price_group, on="date", how="left")
+
+  merged["is_trading_day"] = merged["median_modal_price"].notna()
+
+  price_ffill = merged["median_modal_price"].ffill(limit=3)
+  min_ffill = merged["min_price"].ffill(limit=3)
+  max_ffill = merged["max_price"].ffill(limit=3)
+
+  merged["price_ma_7d"] = price_ffill.rolling(window=7, min_periods=3).mean()
+  merged["price_ma_14d"] = price_ffill.rolling(window=14, min_periods=5).mean()
+  merged["price_ma_30d"] = price_ffill.rolling(window=30, min_periods=10).mean()
+  merged["price_std_30d"] = price_ffill.rolling(window=30, min_periods=10).std()
+
+  merged["pct_change_7d"] = price_ffill.pct_change(periods=7, fill_method=None)
+  merged["pct_change_14d"] = price_ffill.pct_change(
+      periods=14, fill_method=None
+  )
+
+  merged["intraday_spread_pct"] = (max_ffill - min_ffill) / price_ffill.replace(
+      0, np.nan
+  )
+
+  merged["price_zscore_30d"] = (
+      merged["median_modal_price"] - merged["price_ma_30d"]
+  ) / merged["price_std_30d"].replace(0, np.nan)
+
+  merged["alert_status"] = np.select(
+      [merged["price_zscore_30d"] >= 2.0, merged["price_zscore_30d"] >= 1.5],
+      ["CRITICAL_SURGE", "WATCH"],
+      default="NORMAL",
+  )
+
+  merged = pd.merge(
+      merged,
+      weather_region[[
+          "date",
+          "temperature_max_c",
+          "temperature_min_c",
+          "precipitation_mm",
+      ]],
+      on="date",
+      how="left",
+  )
+
+  merged["rain_7d_sum"] = (
+      merged["precipitation_mm"].rolling(window=7, min_periods=1).sum()
+  )
+  merged["rain_14d_sum"] = (
+      merged["precipitation_mm"].rolling(window=14, min_periods=1).sum()
+  )
+  merged["rain_lag_7d"] = merged["rain_7d_sum"].shift(7)
+  merged["rain_lag_14d"] = merged["rain_7d_sum"].shift(14)
+  merged["rain_lag_21d"] = merged["rain_7d_sum"].shift(21)
+
+  temp_ma_30d = (
+      merged["temperature_max_c"].rolling(window=30, min_periods=10).mean()
+  )
+  merged["temp_anomaly_c"] = merged["temperature_max_c"] - temp_ma_30d
+
+  day_of_year = merged["date"].dt.day_of_year
+  merged["month"] = merged["date"].dt.month
+  merged["sin_day_of_year"] = np.sin(2 * np.pi * day_of_year / 365.25)
+  merged["cos_day_of_year"] = np.cos(2 * np.pi * day_of_year / 365.25)
+
+  merged["target_price_7d"] = merged["median_modal_price"].shift(-7)
+  merged["target_price_14d"] = merged["median_modal_price"].shift(-14)
+
+  return merged[merged["is_trading_day"]].drop(columns=["is_trading_day"])
+
+
+def build_feature_store():
+  daily_prices, df_weather = load_and_clean_raw_data(DB_PATH)
+
+  counts = (
+      daily_prices.groupby(["region_name", "commodity"])
+      .size()
+      .reset_index(name="days")
+  )
+  qualified = counts[counts["days"] >= MIN_TRADING_DAYS]
+  print(
+      f"Qualified core series (>= {MIN_TRADING_DAYS} trading days):"
+      f" {len(qualified)} pairs"
+  )
+
+  all_features = []
+  for _, row in qualified.iterrows():
+    reg = row["region_name"]
+    comm = row["commodity"]
+
+    p_sub = daily_prices[
+        (daily_prices["region_name"] == reg)
+        & (daily_prices["commodity"] == comm)
+    ]
+    w_sub = df_weather[df_weather["region_name"] == reg]
+
+    feat_df = engineer_series_features(p_sub, w_sub)
+    feat_df["region_name"] = reg
+    feat_df["commodity"] = comm
+    all_features.append(feat_df)
+
+  final_df = pd.concat(all_features, ignore_index=True)
+
+  conn = sqlite3.connect(DB_PATH)
+  final_df.to_sql(
+      "engineered_features", conn, if_exists="replace", index=False
+  )
+  conn.close()
+
+  print(
+      f"Saved {len(final_df):,} feature-engineered rows to"
+      " 'engineered_features' table."
+  )
+  print(
+      "Regions in feature store:",
+      sorted(final_df["region_name"].unique().tolist()),
+  )
+
+
+if __name__ == "__main__":
+  build_feature_store()

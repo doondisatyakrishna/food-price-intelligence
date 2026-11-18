@@ -1,0 +1,18 @@
+{
+  "7d": {
+    "mae_inr": 598.22,
+    "mape_pct": 22.61,
+    "baseline_mae_inr": 629.67,
+    "improvement_pct": 4.99,
+    "test_start": "2025-02-08",
+    "test_end": "2026-07-24"
+  },
+  "14d": {
+    "mae_inr": 672.95,
+    "mape_pct": 27.04,
+    "baseline_mae_inr": 689.05,
+    "improvement_pct": 2.34,
+    "test_start": "2025-01-29",
+    "test_end": "2026-07-17"
+  }
+}
