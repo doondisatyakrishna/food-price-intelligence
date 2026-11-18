@@ -1,233 +1,61 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
-
-:root {
-  /* Light Green & Pure White Botanical Palette */
-  --bg-mint-canvas: #f1fbf5;
-  --bg-soft-sage: #e4f6ec;
-  --surface-white: #ffffff;
-  --glass-white: rgba(255, 255, 255, 0.82);
-  --glass-mint: rgba(238, 251, 244, 0.86);
-  --glass-border: rgba(16, 185, 129, 0.24);
-
-  /* Typography Colors (High-Contrast Forest & Slate) */
-  --text-forest: #063726;
-  --text-body: #1e4637;
-  --text-muted: #52796a;
-
-  /* Emerald Accents & Alert Badges */
-  --emerald-primary: #059669;
-  --emerald-bright: #10b981;
-  --emerald-soft-bg: #d1fae5;
-  --amber-watch: #d97706;
-  --red-surge: #dc2626;
-
-  /* Light-Mode Neomorphic Dual Shadows (Crisp White Highlight + Soft Mint Shadow) */
-  --neo-raised: -6px -6px 14px rgba(255, 255, 255, 0.95), 6px 6px 16px rgba(15, 92, 57, 0.12);
-  --neo-raised-hover: -4px -4px 10px rgba(255, 255, 255, 1), 8px 8px 20px rgba(15, 92, 57, 0.18);
-  --neo-pressed: inset 4px 4px 9px rgba(15, 92, 57, 0.11), inset -4px -4px 9px rgba(255, 255, 255, 0.92);
-}
-
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  background-color: var(--bg-mint-canvas);
-  color: var(--text-forest);
-  min-height: 100vh;
-  overflow-x: hidden;
-  -webkit-font-smoothing: antialiased;
-}
-
-.mono {
-  font-family: 'JetBrains Mono', monospace;
-}
-
-/* --- Local Agricultural Background Layers --- */
-.page-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: -2;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  transition: opacity 0.5s ease;
-}
-
-/* Landing Page ONLY: Indian farmers in green fields */
-.backdrop-farmers {
-  background-image: url('/images/farmers-hero.jpg');
-  filter: saturate(1.12) brightness(1.02);
-}
-
-/* Dashboard Page ONLY: Pure aerial green fields (Zero Humans) */
-.backdrop-greenery {
-  background-image: url('/images/greenery-fields.jpg');
-  filter: saturate(1.15) brightness(1.04);
-}
-
-/* Soft Light-Mint & White Veil so dark-emerald text pops effortlessly */
-.backdrop-overlay-light {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  background: linear-gradient(
-      180deg,
-      rgba(241, 251, 245, 0.72) 0%,
-      rgba(255, 255, 255, 0.84) 45%,
-      rgba(235, 249, 241, 0.92) 100%
-    );
-}
-
-/* --- Light Frosted Glassmorphism Cards --- */
-.glass-panel {
-  background: var(--glass-white);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  outline: 1px solid var(--glass-border);
-  border-radius: 22px;
-  box-shadow: 0 14px 34px rgba(12, 74, 46, 0.09);
-}
-
-.glass-panel-mint {
-  background: var(--glass-mint);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.95);
-  outline: 1px solid rgba(16, 185, 129, 0.28);
-  border-radius: 22px;
-  box-shadow: 0 14px 34px rgba(12, 74, 46, 0.1);
-}
-
-/* --- Light-Mode Neomorphic Tactile Controls --- */
-.neo-button {
-  background: linear-gradient(145deg, #ffffff, #e8f7ef);
-  color: var(--text-forest);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  border-radius: 14px;
-  padding: 0.72rem 1.35rem;
-  font-weight: 700;
-  font-size: 0.9rem;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  box-shadow: var(--neo-raised);
-  transition: all 0.2s ease;
-}
-
-.neo-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  border-color: var(--emerald-bright);
-  box-shadow: var(--neo-raised-hover);
-}
-
-.neo-button:active:not(:disabled) {
-  transform: translateY(1px);
-  box-shadow: var(--neo-pressed);
-}
-
-.neo-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.neo-button-primary {
-  background: linear-gradient(145deg, #10b981, #059669);
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  box-shadow: -4px -4px 12px rgba(255, 255, 255, 0.85), 6px 6px 16px rgba(5, 150, 105, 0.28);
-}
-
-.neo-button-primary:hover:not(:disabled) {
-  background: linear-gradient(145deg, #059669, #047857);
-  color: #ffffff;
-}
-
-.neo-inset {
-  background: linear-gradient(145deg, #eaf8f0, #f7fcfa);
-  border: 1px solid rgba(16, 185, 129, 0.18);
-  border-radius: 14px;
-  box-shadow: var(--neo-pressed);
-}
-
-.neo-select {
+/* --- Neo-Glassmorphic Range Sliders ("What-If" Simulator) --- */
+.neo-slider {
+  -webkit-appearance: none;
   appearance: none;
-  background-color: #ffffff;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23059669' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.85rem center;
-  color: var(--text-forest);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  border-radius: 14px;
-  padding: 0.68rem 2.4rem 0.68rem 1rem;
-  font-family: inherit;
-  font-size: 0.92rem;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: var(--neo-raised);
-  outline: none;
-}
-
-.neo-select:focus {
-  border-color: var(--emerald-primary);
-}
-
-/* --- Layout & Badges --- */
-.container {
-  max-width: 1340px;
-  margin: 0 auto;
-  padding: 0 1.5rem;
-}
-
-.badge-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.36rem 0.85rem;
-  border-radius: 999px;
-  font-size: 0.76rem;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.badge-normal {
-  background: #d1fae5;
-  color: #065f46;
-  border: 1px solid #6ee7b7;
-}
-
-.badge-watch {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fcd34d;
-}
-
-.badge-surge {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #fca5a5;
-}
-
-.photo-card-img {
   width: 100%;
-  height: 170px;
-  object-fit: cover;
-  border-radius: 14px;
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #d1fae5, #6ee7b7);
+  box-shadow: inset 2px 2px 5px rgba(6, 55, 38, 0.15);
+  outline: none;
+  cursor: pointer;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.neo-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #10b981, #059669);
+  border: 2px solid #ffffff;
+  box-shadow: 0 3px 8px rgba(5, 150, 105, 0.4);
+  cursor: pointer;
+  transition: transform 0.15s ease;
 }
 
-.spin {
-  animation: spin 1s linear infinite;
+.neo-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+}
+
+/* --- Mandi Price Leaderboard Table --- */
+.mandi-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.mandi-table th {
+  text-align: left;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--emerald-primary);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.mandi-table td {
+  padding: 0.72rem 0.85rem;
+  border-bottom: 1px solid rgba(16, 185, 129, 0.12);
+  color: var(--text-body);
+}
+
+.mandi-table tr:last-child td {
+  border-bottom: none;
+}
+
+.mandi-table tr:hover td {
+  background: rgba(209, 250, 229, 0.35);
 }

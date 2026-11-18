@@ -9,7 +9,6 @@ async function requestJson(url, options = {}, onTelemetry = null) {
     ...options,
   });
 
-  // Extract worker PID & latency headers attached by backend/api.py middleware
   if (onTelemetry) {
     const workerPid = response.headers.get('X-Worker-PID');
     const processTime = response.headers.get('X-Process-Time-Ms');
@@ -44,19 +43,37 @@ export const api = {
     return requestJson(`/api/history?${params.toString()}`, {}, onTelemetry);
   },
 
-  getForecast: (regionName, commodity, onTelemetry) =>
+  getMandiLeaderboard: (regionName, commodity, onTelemetry) => {
+    const params = new URLSearchParams({
+      region_name: regionName,
+      commodity,
+    });
+    return requestJson(`/api/mandis?${params.toString()}`, {}, onTelemetry);
+  },
+
+  getForecast: (
+    regionName,
+    commodity,
+    onTelemetry,
+    simOptions = { rain_21d_delta_mm: 0, price_shock_pct: 0 }
+  ) =>
     requestJson(
       '/api/forecast',
       {
         method: 'POST',
-        body: JSON.stringify({ region_name: regionName, commodity }),
+        body: JSON.stringify({
+          region_name: regionName,
+          commodity,
+          rain_21d_delta_mm: simOptions.rain_21d_delta_mm || 0,
+          price_shock_pct: simOptions.price_shock_pct || 0,
+        }),
       },
       onTelemetry
     ),
 
-  getWeatherForecast: (regionName, days = 14, onTelemetry) => {
+  getWeatherForecast: (hubOrRegionName, days = 14, onTelemetry) => {
     const params = new URLSearchParams({
-      region_name: regionName,
+      region_name: hubOrRegionName,
       days: String(days),
     });
     return requestJson(`/api/weather-forecast?${params.toString()}`, {}, onTelemetry);

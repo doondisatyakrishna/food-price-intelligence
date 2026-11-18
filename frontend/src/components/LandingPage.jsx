@@ -252,7 +252,7 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
           </p>
         </div>
 
-        {/* Pillar 3: Dedicated Weather & Rainfall Lag Intelligence */}
+        {/* Pillar 3: Dedicated External Weather Outlook & Rainfall Lag Intelligence */}
         <div className="glass-panel-mint" style={{ padding: '1.5rem' }}>
           <div
             className="neo-inset"
@@ -267,29 +267,31 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span className="badge-pill badge-normal">
-                <CloudRain size={13} /> WEATHER MODULE
+                <CloudRain size={13} /> EXTERNAL OPEN-METEO API
               </span>
               <ThermometerSun size={24} color="var(--emerald-primary)" />
             </div>
             <div>
-              <div className="mono" style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-forest)' }}>
-                21-Day Rainfall Lag
+              <div className="mono" style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-forest)' }}>
+                6 Agro-Climatic Zones
               </div>
               <div style={{ fontSize: '0.82rem', color: 'var(--text-body)', marginTop: '0.25rem' }}>
-                Empirical correlation climbs from <strong>+0.16</strong> (same week) to{' '}
-                <strong>+0.30</strong> three weeks after heavy rain.
+                Observed <strong>21-day rain lag</strong> feeds our price ML, while live 14-day
+                weather forecasts are sourced externally from <strong>Open-Meteo</strong>.
               </div>
             </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', marginBottom: '0.45rem' }}>
             <CloudRain size={19} color="var(--emerald-primary)" />
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Separate 14-Day Weather Outlook</h3>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>
+              External 14-Day Weather Intelligence
+            </h3>
           </div>
           <p style={{ fontSize: '0.9rem', lineHeight: 1.62, color: 'var(--text-body)' }}>
-            To avoid compounding forecast errors, our dashboard runs an independent{' '}
-            <strong>14-day Open-Meteo forecast</strong> that flags heavy-rain days (&ge;25 mm)
-            likely to delay crop curing and rural highway transport.
+            Rather than generating our own weather predictions and compounding errors, AgroPulse
+            fetches official 14-day forecasts directly from <strong>Open-Meteo</strong> across
+            Coastal Andhra, Rayalaseema, North &amp; South Telangana, Nashik, and Kolar.
           </p>
         </div>
       </section>
