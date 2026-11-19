@@ -6,6 +6,8 @@ import threading
 import time
 from dotenv import find_dotenv, load_dotenv
 import requests
+import re
+
 
 try:
   from backend.features import build_feature_store
@@ -72,6 +74,24 @@ def enable_sqlite_wal():
     conn.execute("PRAGMA busy_timeout = 15000;")
     conn.close()
 
+def _redact_secrets(text: str) -> str:
+  return re.sub(
+      r'(?i)(api[-_]?key|token|secret)=([^&\s\'"]+)',
+      r"\1=[REDACTED]",
+      str(text),
+  )
+
+def _summarize_request_error(exc: Exception) -> str:
+  raw = _redact_secrets(str(exc))
+  if "Connection refused" in raw or "Errno 111" in raw:
+    return (
+        "Connection refused by data.gov.in (cloud egress IP likely"
+        " rate-limited/blocked; scheduled GitHub Actions sync will still"
+        " update DB)"
+    )
+  if "timed out" in raw.lower() or "Timeout" in type(exc).__name__:
+    return "Upstream request timed out"
+  return f"{type(exc).__name__}"
 
 def fetch_gov_records(resource_id: str, params: dict, retries: int = 3) -> dict:
   url = f"https://api.data.gov.in/resource/{resource_id}"
@@ -85,12 +105,9 @@ def fetch_gov_records(resource_id: str, params: dict, retries: int = 3) -> dict:
       if resp.status_code in (429, 502, 503, 504):
         time.sleep(2 * attempt)
       else:
-        raise RuntimeError(
-            f"data.gov.in rejected request ({last_error}) for resource"
-            f" {resource_id}"
-        )
+        raise RuntimeError(f"data.gov.in rejected request ({last_error})")
     except requests.RequestException as exc:
-      last_error = str(exc)
+      last_error = _summarize_request_error(exc)
       if attempt < retries:
         time.sleep(2 * attempt)
   raise RuntimeError(
@@ -387,109 +404,140 @@ def sync_mandi_gap(session, today: date) -> int:
   return total_inserted
 
 
+
 def run_catchup_sync(
-    bypass_cooldown: bool = False, force_feature_rebuild: bool = False
+    bypass_cooldown: bool = False,
+    force_feature_rebuild: bool = False
 ) -> dict:
-  global _last_sync_timestamp
+    global _last_sync_timestamp
 
-  now = time.time()
-  elapsed = now - _last_sync_timestamp
-  if (
-      not bypass_cooldown
-      and _last_sync_timestamp > 0
-      and elapsed < COOLDOWN_SECONDS
-  ):
-    remaining = int(COOLDOWN_SECONDS - elapsed)
-    sync_status["cooldown_remaining_sec"] = remaining
-    sync_status["status"] = "skipped"
-    sync_status["last_message"] = (
-        f"Already synced recently. Next sync available in {remaining // 60}m"
-        f" {remaining % 60}s."
-    )
-    return sync_status
+    now = time.time()
+    elapsed = now - _last_sync_timestamp
 
-  if not _sync_lock.acquire(blocking=False):
-    return sync_status
+    if (
+        not bypass_cooldown
+        and _last_sync_timestamp > 0
+        and elapsed < COOLDOWN_SECONDS
+    ):
+        remaining = int(COOLDOWN_SECONDS - elapsed)
+        sync_status["cooldown_remaining_sec"] = remaining
+        sync_status["status"] = "skipped"
+        sync_status["last_message"] = _redact_secrets(
+            f"Already synced recently. Next sync available in "
+            f"{remaining // 60}m {remaining % 60}s."
+        )
+        return sync_status
 
-  session = None
-  errors: list[str] = []
-  new_weather = 0
-  new_prices = 0
+    if not _sync_lock.acquire(blocking=False):
+        return sync_status
 
-  try:
-    sync_status["is_syncing"] = True
-    sync_status["cooldown_remaining_sec"] = 0
-    sync_status["last_started_at"] = datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
-    sync_status["last_message"] = (
-        "Syncing AP, Telangana & hub weather + prices..."
-    )
+    session = None
+    errors: list[str] = []
+    new_weather = 0
+    new_prices = 0
 
-    enable_sqlite_wal()
-    session = init_db()
-    today = date.today()
-
-    # 1. Isolated weather sync (failure will NOT block mandi prices)
     try:
-      new_weather = sync_weather_gap(session, today)
-    except Exception as w_exc:
-      session.rollback()
-      errors.append(f"Weather sync failed: {w_exc}")
-      print(f"[Weather Sync Error] {w_exc}")
+        sync_status["is_syncing"] = True
+        sync_status["cooldown_remaining_sec"] = 0
+        sync_status["last_started_at"] = datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        sync_status["last_message"] = _redact_secrets(
+            "Syncing AP, Telangana & hub weather + prices..."
+        )
 
-    # 2. Isolated mandi price sync
-    try:
-      new_prices = sync_mandi_gap(session, today)
-    except Exception as m_exc:
-      session.rollback()
-      errors.append(f"Mandi sync failed: {m_exc}")
-      print(f"[Mandi Sync Error] {m_exc}")
+        enable_sqlite_wal()
+        session = init_db()
+        today = date.today()
 
-    if new_prices > 0 or new_weather > 0 or force_feature_rebuild:
-      sync_status["last_message"] = (
-          "Rebuilding rolling features & alert Z-scores..."
-      )
-      build_feature_store()
+        # 1. Isolated weather sync
+        try:
+            new_weather = sync_weather_gap(session, today)
+        except Exception as w_exc:
+            session.rollback()
+            errors.append(
+                _redact_secrets(f"Weather sync failed: {w_exc}")
+            )
+            print(
+                _redact_secrets(f"[Weather Sync Error] {w_exc}")
+            )
 
-    sync_status["new_price_rows"] = new_prices
-    sync_status["new_weather_rows"] = new_weather
-    sync_status["errors"] = errors
+        # 2. Isolated mandi price sync
+        try:
+            new_prices = sync_mandi_gap(session, today)
+        except Exception as m_exc:
+            session.rollback()
+            errors.append(
+                _redact_secrets(f"Mandi sync failed: {m_exc}")
+            )
+            print(
+                _redact_secrets(f"[Mandi Sync Error] {m_exc}")
+            )
 
-    if len(errors) >= 2:
-      sync_status["status"] = "failed"
-      sync_status["last_message"] = f"Sync failed: {'; '.join(errors)}"
-    elif len(errors) == 1:
-      _last_sync_timestamp = time.time()
-      sync_status["status"] = "partial"
-      sync_status["last_completed_at"] = datetime.now().strftime(
-          "%Y-%m-%d %H:%M:%S"
-      )
-      sync_status["last_message"] = (
-          f"Partial sync ({today}): +{new_prices} prices, +{new_weather}"
-          f" weather. Warning: {errors[0]}"
-      )
-    else:
-      _last_sync_timestamp = time.time()
-      sync_status["status"] = "success"
-      sync_status["last_completed_at"] = datetime.now().strftime(
-          "%Y-%m-%d %H:%M:%S"
-      )
-      sync_status["last_message"] = (
-          f"Up to date ({today}). Added {new_prices} price rows & {new_weather}"
-          " weather days."
-      )
+        # 3. Rebuild feature store when necessary
+        if new_prices > 0 or new_weather > 0 or force_feature_rebuild:
+            sync_status["last_message"] = _redact_secrets(
+                "Rebuilding rolling features & alert Z-scores..."
+            )
+            build_feature_store()
 
-    print(f"[Sync {sync_status['status'].upper()}] {sync_status['last_message']}")
-  except Exception as exc:
-    sync_status["status"] = "failed"
-    sync_status["errors"] = errors + [str(exc)]
-    sync_status["last_message"] = f"Sync failed: {exc}"
-    print(f"[Sync Critical Error] {exc}")
-  finally:
-    if session is not None:
-      session.close()
-    sync_status["is_syncing"] = False
-    _sync_lock.release()
+        sync_status["new_price_rows"] = new_prices
+        sync_status["new_weather_rows"] = new_weather
+        sync_status["errors"] = errors
 
-  return sync_status
+        # 4. Determine final sync status
+        if len(errors) >= 2:
+            sync_status["status"] = "failed"
+            sync_status["last_message"] = _redact_secrets(
+                f"Sync failed: {'; '.join(errors)}"
+            )
+
+        elif len(errors) == 1:
+            _last_sync_timestamp = time.time()
+            sync_status["status"] = "partial"
+            sync_status["last_completed_at"] = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            sync_status["last_message"] = _redact_secrets(
+                f"Partial sync ({today}): +{new_prices} prices, "
+                f"+{new_weather} weather. Warning: {errors[0]}"
+            )
+
+        else:
+            _last_sync_timestamp = time.time()
+            sync_status["status"] = "success"
+            sync_status["last_completed_at"] = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            sync_status["last_message"] = _redact_secrets(
+                f"Up to date ({today}). Added {new_prices} price rows "
+                f"& {new_weather} weather days."
+            )
+
+        print(
+            _redact_secrets(
+                f"[Sync {sync_status['status'].upper()}] "
+                f"{sync_status['last_message']}"
+            )
+        )
+
+    except Exception as exc:
+        sync_status["status"] = "failed"
+        sync_status["errors"] = errors + [
+            _redact_secrets(str(exc))
+        ]
+        sync_status["last_message"] = _redact_secrets(
+            f"Sync failed: {exc}"
+        )
+        print(
+            _redact_secrets(f"[Sync Critical Error] {exc}")
+        )
+
+    finally:
+        if session is not None:
+            session.close()
+
+        sync_status["is_syncing"] = False
+        _sync_lock.release()
+
+    return sync_status

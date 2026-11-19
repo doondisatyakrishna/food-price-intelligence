@@ -67,3 +67,21 @@ def test_weather_fallback_deduplicates_dates():
     dates = [d["date"] for d in data["daily"]]
     assert len(dates) == len(set(dates))
     assert "Observed SQLite Baseline" in data["source"]
+
+def test_sync_error_never_exposes_api_key():
+  from backend import sync
+
+  fake_secret = "579b464db66ec23bdd000001supersecretkey"
+  leaked_exc = sync.requests.ConnectionError(
+      "HTTPSConnectionPool(host='api.data.gov.in', port=443): Max retries"
+      f" exceeded with url: /resource/9ef84268?api-key={fake_secret}&limit=10"
+      " (Caused by NewConnectionError('[Errno 111] Connection refused'))"
+  )
+  with patch("backend.sync.requests.get", side_effect=leaked_exc):
+    try:
+      sync.fetch_gov_records(
+          "9ef84268", {"api-key": fake_secret}, retries=1
+      )
+    except RuntimeError as err:
+      assert fake_secret not in str(err)
+      assert "Connection refused" in str(err)
