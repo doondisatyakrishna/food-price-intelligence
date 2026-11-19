@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from fastapi import HTTPException
 import joblib
+import numpy as np
 import pandas as pd
 from backend.db import get_db_connection
 
@@ -12,15 +13,50 @@ MODEL_DIR = BASE_DIR / "models"
 ml_state = {"model_7d": None, "model_14d": None, "metrics": {}}
 
 
+def _unwrap_model_bundle(raw_obj) -> dict | None:
+  """Extracts the sklearn estimator and feature schema whether saved as a dict or raw model."""
+  if raw_obj is None:
+    return None
+
+  if isinstance(raw_obj, dict):
+    estimator = next(
+        (v for v in raw_obj.values() if hasattr(v, "predict")), None
+    )
+    feature_cols = (
+        raw_obj.get("feature_cols")
+        or raw_obj.get("features")
+        or raw_obj.get("columns")
+    )
+    cat_cols = raw_obj.get("cat_cols") or raw_obj.get("categorical_cols")
+    mae = raw_obj.get("mae") or raw_obj.get("ml_mae") or raw_obj.get("test_mae")
+    return {
+        "estimator": estimator,
+        "feature_cols": list(feature_cols) if feature_cols is not None else None,
+        "cat_cols": (
+            set(cat_cols)
+            if cat_cols is not None
+            else {"region_name", "commodity"}
+        ),
+        "mae": float(mae) if mae is not None else None,
+    }
+
+  return {
+      "estimator": raw_obj,
+      "feature_cols": None,
+      "cat_cols": {"region_name", "commodity"},
+      "mae": None,
+  }
+
+
 def load_ml_models() -> None:
   path_7d = MODEL_DIR / "price_forecaster_7d.joblib"
   path_14d = MODEL_DIR / "price_forecaster_14d.joblib"
   metrics_path = MODEL_DIR / "training_metrics.json"
 
   if path_7d.exists():
-    ml_state["model_7d"] = joblib.load(path_7d)
+    ml_state["model_7d"] = _unwrap_model_bundle(joblib.load(path_7d))
   if path_14d.exists():
-    ml_state["model_14d"] = joblib.load(path_14d)
+    ml_state["model_14d"] = _unwrap_model_bundle(joblib.load(path_14d))
   if metrics_path.exists():
     with open(metrics_path, "r") as f:
       ml_state["metrics"] = json.load(f)
@@ -39,6 +75,32 @@ def classify_zscore(z_val: float | None) -> str:
   if z_val >= 1.5:
     return "WATCH"
   return "NORMAL"
+
+
+def _predict_return(bundle: dict | None, feat_dict: dict) -> float:
+  if not bundle or bundle.get("estimator") is None:
+    return 0.0
+
+  estimator = bundle["estimator"]
+  feature_cols = bundle.get("feature_cols")
+  if feature_cols is None and hasattr(estimator, "feature_names_in_"):
+    feature_cols = list(estimator.feature_names_in_)
+
+  df = pd.DataFrame([feat_dict]).fillna(value=np.nan)
+  if feature_cols:
+    for col in feature_cols:
+      if col not in df.columns:
+        df[col] = np.nan
+    df = df[feature_cols]
+
+  cat_cols = bundle.get("cat_cols") or {"region_name", "commodity"}
+  for col in df.columns:
+    if col in cat_cols:
+      df[col] = df[col].astype("category")
+    elif col not in ("date", "alert_status"):
+      df[col] = pd.to_numeric(df[col], errors="coerce")
+
+  return float(estimator.predict(df)[0])
 
 
 def generate_price_forecast(
@@ -98,21 +160,27 @@ def generate_price_forecast(
       float(feat_dict.get("rain_14d_sum") or 0.0) + (rain_21d_delta_mm * 0.7),
   )
 
-  X_infer = pd.DataFrame([feat_dict])
+  bundle_7d = ml_state.get("model_7d")
+  bundle_14d = ml_state.get("model_14d")
   metrics = ml_state.get("metrics", {})
-  mae_7d = round(float(metrics.get("7d", {}).get("ml_mae", 598.22)), 2)
-  mae_14d = round(float(metrics.get("14d", {}).get("ml_mae", 672.95)), 2)
 
-  ret_7d = (
-      float(ml_state["model_7d"].predict(X_infer)[0])
-      if ml_state.get("model_7d") is not None
-      else 0.0
+  mae_7d = round(
+      float(
+          (bundle_7d or {}).get("mae")
+          or metrics.get("7d", {}).get("ml_mae", 598.22)
+      ),
+      2,
   )
-  ret_14d = (
-      float(ml_state["model_14d"].predict(X_infer)[0])
-      if ml_state.get("model_14d") is not None
-      else 0.0
+  mae_14d = round(
+      float(
+          (bundle_14d or {}).get("mae")
+          or metrics.get("14d", {}).get("ml_mae", 672.95)
+      ),
+      2,
   )
+
+  ret_7d = _predict_return(bundle_7d, feat_dict)
+  ret_14d = _predict_return(bundle_14d, feat_dict)
 
   pred_7d = round(simulated_price * (1.0 + ret_7d), 2)
   pred_14d = round(simulated_price * (1.0 + ret_14d), 2)
