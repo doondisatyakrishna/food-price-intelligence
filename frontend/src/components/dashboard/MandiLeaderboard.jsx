@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { Store } from 'lucide-react';
 
 const MandiLeaderboard = memo(function MandiLeaderboard({

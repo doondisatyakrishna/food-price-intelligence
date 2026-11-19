@@ -62,28 +62,40 @@ sync_status = {
     "cooldown_remaining_sec": 0,
 }
 
+from sqlalchemy.exc import IntegrityError
+
 
 def enable_sqlite_wal():
   if DB_PATH.exists():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout = 15000;")
     conn.close()
 
 
 def fetch_gov_records(resource_id: str, params: dict, retries: int = 3) -> dict:
   url = f"https://api.data.gov.in/resource/{resource_id}"
+  last_error = "Unknown upstream error"
   for attempt in range(1, retries + 1):
     try:
-      resp = requests.get(url, params=params, headers=HEADERS, timeout=(10, 60))
+      resp = requests.get(url, params=params, headers=HEADERS, timeout=(10, 45))
       if resp.status_code == 200:
         return resp.json()
+      last_error = f"HTTP {resp.status_code}"
       if resp.status_code in (429, 502, 503, 504):
-        time.sleep(3 * attempt)
+        time.sleep(2 * attempt)
       else:
-        return {}
-    except requests.RequestException:
-      time.sleep(3 * attempt)
-  return {}
+        raise RuntimeError(
+            f"data.gov.in rejected request ({last_error}) for resource"
+            f" {resource_id}"
+        )
+    except requests.RequestException as exc:
+      last_error = str(exc)
+      if attempt < retries:
+        time.sleep(2 * attempt)
+  raise RuntimeError(
+      f"data.gov.in unreachable after {retries} attempts: {last_error}"
+  )
 
 
 def fetch_state_page(
@@ -93,6 +105,7 @@ def fetch_state_page(
 
   while others index `filters[state.keyword]`.
   """
+  last_exc = None
   for filter_key in ("filters[State]", "filters[state.keyword]", "filters[state]"):
     params = {
         "api-key": DATA_GOV_API_KEY,
@@ -101,9 +114,14 @@ def fetch_state_page(
         "offset": offset,
         filter_key: state_name,
     }
-    payload = fetch_gov_records(resource_id, params)
-    if payload.get("records"):
-      return payload
+    try:
+      payload = fetch_gov_records(resource_id, params)
+      if payload.get("records"):
+        return payload
+    except RuntimeError as exc:
+      last_exc = exc
+  if last_exc and offset == 0:
+    raise last_exc
   return {}
 
 
@@ -152,41 +170,12 @@ def sync_weather_gap(session, today: date) -> int:
           f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
           f"&timezone=Asia/Kolkata"
       )
-      resp = requests.get(arch_url, timeout=35)
-      if resp.status_code == 200:
-        daily = resp.json().get("daily", {})
-        for i, d_str in enumerate(daily.get("time", [])):
-          d_obj = datetime.strptime(d_str, "%Y-%m-%d").date()
-          if d_obj not in existing and daily["temperature_2m_max"][i] is not None:
-            session.add(
-                WeatherData(
-                    region_name=region_name,
-                    date=d_obj,
-                    temperature_max_c=float(daily["temperature_2m_max"][i]),
-                    temperature_min_c=float(daily["temperature_2m_min"][i]),
-                    precipitation_mm=float(daily["precipitation_sum"][i] or 0.0),
-                )
-            )
-            existing.add(d_obj)
-            total_inserted += 1
-      session.commit()
-      gap_days = 5
-
-    recent_url = (
-        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-        f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
-        f"&timezone=Asia/Kolkata&past_days={min(gap_days, 90)}&forecast_days=1"
-    )
-    resp = requests.get(recent_url, timeout=25)
-    if resp.status_code == 200:
+      resp = requests.get(arch_url, timeout=25)
+      resp.raise_for_status()
       daily = resp.json().get("daily", {})
       for i, d_str in enumerate(daily.get("time", [])):
         d_obj = datetime.strptime(d_str, "%Y-%m-%d").date()
-        if (
-            d_obj <= today
-            and d_obj not in existing
-            and daily["temperature_2m_max"][i] is not None
-        ):
+        if d_obj not in existing and daily["temperature_2m_max"][i] is not None:
           session.add(
               WeatherData(
                   region_name=region_name,
@@ -198,6 +187,35 @@ def sync_weather_gap(session, today: date) -> int:
           )
           existing.add(d_obj)
           total_inserted += 1
+      session.commit()
+      gap_days = 5
+
+    recent_url = (
+        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+        f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
+        f"&timezone=Asia/Kolkata&past_days={min(gap_days, 90)}&forecast_days=1"
+    )
+    resp = requests.get(recent_url, timeout=20)
+    resp.raise_for_status()
+    daily = resp.json().get("daily", {})
+    for i, d_str in enumerate(daily.get("time", [])):
+      d_obj = datetime.strptime(d_str, "%Y-%m-%d").date()
+      if (
+          d_obj <= today
+          and d_obj not in existing
+          and daily["temperature_2m_max"][i] is not None
+      ):
+        session.add(
+            WeatherData(
+                region_name=region_name,
+                date=d_obj,
+                temperature_max_c=float(daily["temperature_2m_max"][i]),
+                temperature_min_c=float(daily["temperature_2m_min"][i]),
+                precipitation_mm=float(daily["precipitation_sum"][i] or 0.0),
+            )
+        )
+        existing.add(d_obj)
+        total_inserted += 1
     session.commit()
 
   return total_inserted
@@ -228,9 +246,24 @@ def ingest_records_into_db(
     if price_date < min_date:
       continue
 
-    modal_val = float(row.get("modal_price") or 0)
+    try:
+      modal_val = float(row.get("modal_price") or 0)
+    except (TypeError, ValueError):
+      continue
     if modal_val <= 0:
       continue
+
+    try:
+      raw_min = float(row.get("min_price") or 0)
+    except (TypeError, ValueError):
+      raw_min = 0.0
+    try:
+      raw_max = float(row.get("max_price") or 0)
+    except (TypeError, ValueError):
+      raw_max = 0.0
+
+    min_val = raw_min if (0 < raw_min <= modal_val) else modal_val
+    max_val = raw_max if (raw_max >= modal_val) else modal_val
 
     mkt_key = (r_market, r_state)
     if mkt_key not in market_cache:
@@ -261,20 +294,23 @@ def ingest_records_into_db(
             commodity_id=comm_id,
             date=price_date,
             modal_price_inr=modal_val,
-            min_price_inr=float(row.get("min_price") or modal_val),
-            max_price_inr=float(row.get("max_price") or modal_val),
+            min_price_inr=min_val,
+            max_price_inr=max_val,
         )
     )
     inserted += 1
 
-  session.commit()
+  try:
+    session.commit()
+  except IntegrityError:
+    session.rollback()
+    return 0
   return inserted
 
 
 def sync_mandi_gap(session, today: date) -> int:
   if not DATA_GOV_API_KEY:
-    print("[Sync] DATA_GOV_API_KEY missing in .env; skipping mandi sync.")
-    return 0
+    raise RuntimeError("DATA_GOV_API_KEY is not configured in environment.")
 
   market_cache = {(m.name, m.state): m.id for m in session.query(Market).all()}
   comm_cache = {c.name: c.id for c in session.query(Commodity).all()}
@@ -365,6 +401,7 @@ def run_catchup_sync(
   ):
     remaining = int(COOLDOWN_SECONDS - elapsed)
     sync_status["cooldown_remaining_sec"] = remaining
+    sync_status["status"] = "skipped"
     sync_status["last_message"] = (
         f"Already synced recently. Next sync available in {remaining // 60}m"
         f" {remaining % 60}s."
@@ -373,6 +410,11 @@ def run_catchup_sync(
 
   if not _sync_lock.acquire(blocking=False):
     return sync_status
+
+  session = None
+  errors: list[str] = []
+  new_weather = 0
+  new_prices = 0
 
   try:
     sync_status["is_syncing"] = True
@@ -388,9 +430,21 @@ def run_catchup_sync(
     session = init_db()
     today = date.today()
 
-    new_weather = sync_weather_gap(session, today)
-    new_prices = sync_mandi_gap(session, today)
-    session.close()
+    # 1. Isolated weather sync (failure will NOT block mandi prices)
+    try:
+      new_weather = sync_weather_gap(session, today)
+    except Exception as w_exc:
+      session.rollback()
+      errors.append(f"Weather sync failed: {w_exc}")
+      print(f"[Weather Sync Error] {w_exc}")
+
+    # 2. Isolated mandi price sync
+    try:
+      new_prices = sync_mandi_gap(session, today)
+    except Exception as m_exc:
+      session.rollback()
+      errors.append(f"Mandi sync failed: {m_exc}")
+      print(f"[Mandi Sync Error] {m_exc}")
 
     if new_prices > 0 or new_weather > 0 or force_feature_rebuild:
       sync_status["last_message"] = (
@@ -398,26 +452,44 @@ def run_catchup_sync(
       )
       build_feature_store()
 
-    _last_sync_timestamp = time.time()
     sync_status["new_price_rows"] = new_prices
     sync_status["new_weather_rows"] = new_weather
-    sync_status["last_completed_at"] = datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
-    sync_status["last_message"] = (
-        f"Up to date ({today}). Added {new_prices} price rows & {new_weather}"
-        " weather days."
-    )
-    print(f"[Sync Complete] {sync_status['last_message']}")
+    sync_status["errors"] = errors
+
+    if len(errors) >= 2:
+      sync_status["status"] = "failed"
+      sync_status["last_message"] = f"Sync failed: {'; '.join(errors)}"
+    elif len(errors) == 1:
+      _last_sync_timestamp = time.time()
+      sync_status["status"] = "partial"
+      sync_status["last_completed_at"] = datetime.now().strftime(
+          "%Y-%m-%d %H:%M:%S"
+      )
+      sync_status["last_message"] = (
+          f"Partial sync ({today}): +{new_prices} prices, +{new_weather}"
+          f" weather. Warning: {errors[0]}"
+      )
+    else:
+      _last_sync_timestamp = time.time()
+      sync_status["status"] = "success"
+      sync_status["last_completed_at"] = datetime.now().strftime(
+          "%Y-%m-%d %H:%M:%S"
+      )
+      sync_status["last_message"] = (
+          f"Up to date ({today}). Added {new_prices} price rows & {new_weather}"
+          " weather days."
+      )
+
+    print(f"[Sync {sync_status['status'].upper()}] {sync_status['last_message']}")
   except Exception as exc:
-    sync_status["last_message"] = f"Sync warning: {exc}"
-    print(f"[Sync Error] {exc}")
+    sync_status["status"] = "failed"
+    sync_status["errors"] = errors + [str(exc)]
+    sync_status["last_message"] = f"Sync failed: {exc}"
+    print(f"[Sync Critical Error] {exc}")
   finally:
+    if session is not None:
+      session.close()
     sync_status["is_syncing"] = False
     _sync_lock.release()
 
   return sync_status
-
-
-if __name__ == "__main__":
-  run_catchup_sync(bypass_cooldown=True, force_feature_rebuild=True)

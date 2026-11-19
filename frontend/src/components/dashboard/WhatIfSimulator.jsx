@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { Sliders, RotateCcw } from 'lucide-react';
 
 const WhatIfSimulator = memo(function WhatIfSimulator({

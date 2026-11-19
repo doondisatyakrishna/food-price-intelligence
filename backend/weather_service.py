@@ -1,3 +1,7 @@
+import time
+from fastapi import HTTPException
+import requests
+from backend.db import cache_get, cache_set, get_db_connection
 from fastapi import HTTPException
 import requests
 from backend.db import cache_get, cache_set, get_db_connection
@@ -54,7 +58,8 @@ DEFAULT_HUB_BY_REGION = {
     "Kolar": "Kolar",
 }
 
-_stale_weather_backup: dict[str, dict] = {}
+_STALE_WEATHER_MAX_AGE_SEC = 21600  # 6 hours
+_stale_weather_backup: dict[tuple[str, int], tuple[float, dict]] = {}
 
 
 def get_weather_hubs_list() -> list[dict]:
@@ -148,19 +153,33 @@ def fetch_regional_weather(
         "daily": forecast_days,
     }
     cache_set(c_key, result, sync_token, ttl=1800)
-    _stale_weather_backup[hub_key] = result
+    _stale_weather_backup[(hub_key, days)] = (time.time(), result)
     return result
 
   except requests.RequestException:
-    if hub_key in _stale_weather_backup:
-      return _stale_weather_backup[hub_key]
+    backup_entry = _stale_weather_backup.get((hub_key, days))
+    if backup_entry:
+      saved_at, cached_payload = backup_entry
+      age_min = int((time.time() - saved_at) / 60)
+      if (time.time() - saved_at) <= _STALE_WEATHER_MAX_AGE_SEC:
+        return {
+            **cached_payload,
+            "source": (
+                f"Cached Open-Meteo Forecast ({age_min}m ago — live feed"
+                " temporarily busy)"
+            ),
+        }
 
     conn = get_db_connection()
     rows = conn.execute(
         """
-            SELECT date, temperature_max_c, temperature_min_c, precipitation_mm
+            SELECT date,
+                   ROUND(AVG(temperature_max_c), 1) AS temperature_max_c,
+                   ROUND(AVG(temperature_min_c), 1) AS temperature_min_c,
+                   ROUND(MAX(precipitation_mm), 1) AS precipitation_mm
             FROM weather_data
             WHERE region_name = ?
+            GROUP BY date
             ORDER BY date DESC
             LIMIT 5
             """,
@@ -189,7 +208,10 @@ def fetch_regional_weather(
         "location_label": hub["label"],
         "districts_covered": hub["districts"],
         "coordinates": {"lat": lat, "lon": lon},
-        "source": "Recent Regional Baseline (Open-Meteo temporarily busy)",
+        "source": (
+            "Recent Observed SQLite Baseline (Open-Meteo temporarily"
+            " unavailable)"
+        ),
         "horizon_days": len(fallback_days),
         "total_expected_rain_mm": round(
             sum(d["precipitation_mm"] for d in fallback_days), 1
@@ -198,8 +220,8 @@ def fetch_regional_weather(
             1 for d in fallback_days if d["precipitation_mm"] >= 25.0
         ),
         "outlook_summary": (
-            "Live forecast feed temporarily busy — displaying latest regional"
-            " observations."
+            "Live forecast feed unavailable — showing latest deduplicated"
+            " regional observations."
         ),
         "daily": fallback_days,
     }

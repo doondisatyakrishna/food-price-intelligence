@@ -79,7 +79,13 @@ def classify_zscore(z_val: float | None) -> str:
 
 def _predict_return(bundle: dict | None, feat_dict: dict) -> float:
   if not bundle or bundle.get("estimator") is None:
-    return 0.0
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Forecasting model artifact is unavailable. Check models/ directory"
+            " or retrain."
+        ),
+    )
 
   estimator = bundle["estimator"]
   feature_cols = bundle.get("feature_cols")

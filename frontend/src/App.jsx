@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Navbar from './components/Navbar';
 import LandingPage from './components/LandingPage';
 import DashboardPage from './components/DashboardPage';
@@ -13,6 +13,12 @@ export default function App() {
   useEffect(() => {
     api.getCatalog(setTelemetry).then(setCatalog).catch(console.error);
     api.getSyncStatus().then(setSyncStatus).catch(console.error);
+
+    // Re-check once after 47s to catch Render's 45s deferred boot sync if active
+    const bootCheck = setTimeout(() => {
+      api.getSyncStatus().then(setSyncStatus).catch(console.error);
+    }, 47000);
+    return () => clearTimeout(bootCheck);
   }, []);
 
   useEffect(() => {
@@ -36,7 +42,11 @@ export default function App() {
   const handleTriggerSync = useCallback(async () => {
     try {
       const res = await api.triggerSync();
-      if (res?.status) setSyncStatus(res.status);
+      if (res?.status) {
+        setSyncStatus(res.status);
+      } else if (res?.started) {
+        setSyncStatus((prev) => ({ ...(prev || {}), is_syncing: true }));
+      }
     } catch (err) {
       console.error('Sync trigger failed:', err);
     }

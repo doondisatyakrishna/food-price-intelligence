@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   ArrowRight,
   CloudRain,
@@ -52,10 +51,13 @@ const HISTORICAL_EVENTS = [
 ];
 
 export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) {
-  const totalSeries = catalog?.series?.length || 21;
-  const totalTradingDays =
-    catalog?.series?.reduce((acc, item) => acc + (item.trading_days || 0), 0) || 18615;
-  const model14dEdge = catalog?.model_metrics?.['14d']?.improvement_pct ?? 6.35;
+  const totalPriceRows = catalog?.total_price_rows;
+  const totalSeries = catalog?.series?.length;
+  const totalTradingDays = catalog?.series?.reduce(
+    (acc, item) => acc + (item.trading_days || 0),
+    0
+  );
+  const model14dEdge = catalog?.model_metrics?.['14d']?.improvement_pct;
 
   return (
     <main className="container" style={{ paddingTop: '2rem', paddingBottom: '4rem' }}>
@@ -131,7 +133,7 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
           </div>
         </div>
 
-        {/* 3 Light Neomorphic KPI Summary Tiles */}
+        {/* 3 Live Catalog KPI Summary Tiles */}
         <div
           style={{
             display: 'grid',
@@ -155,7 +157,7 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
                 marginTop: '0.2rem',
               }}
             >
-              52,600+
+              {totalPriceRows != null ? totalPriceRows.toLocaleString('en-IN') : '—'}
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
               Multi-year APMC modal prices
@@ -175,16 +177,18 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
                 marginTop: '0.2rem',
               }}
             >
-              {totalSeries} Pairs
+              {totalSeries != null ? `${totalSeries} Pairs` : '—'}
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              {totalTradingDays.toLocaleString()} daily feature rows
+              {totalTradingDays != null
+                ? `${totalTradingDays.toLocaleString('en-IN')} daily feature rows`
+                : 'Awaiting live catalog'}
             </div>
           </div>
 
           <div className="neo-inset" style={{ padding: '1.1rem 1.25rem' }}>
             <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 700 }}>
-              14-DAY FORECAST ACCURACY
+              14-DAY FORECAST EDGE
             </div>
             <div
               className="mono"
@@ -195,16 +199,16 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
                 marginTop: '0.2rem',
               }}
             >
-              +{model14dEdge}%
+              {model14dEdge != null ? `+${model14dEdge}%` : '—'}
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              MAE improvement vs. baseline
+              Out-of-time MAE gain vs. baseline
             </div>
           </div>
         </div>
       </section>
 
-      {/* 2. Visual Platform Pillars (Includes Local Farmer & Harvest Photography) */}
+      {/* 2. Visual Platform Pillars */}
       <section
         style={{
           display: 'grid',
@@ -214,7 +218,6 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
           margin: '0 auto 2.4rem auto',
         }}
       >
-        {/* Pillar 1: Field & Farmer Crop Monitoring */}
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
           <img
             src="/images/farmers-crop.jpg"
@@ -233,7 +236,6 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
           </p>
         </div>
 
-        {/* Pillar 2: Harvest & Market Price Forecasting */}
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
           <img
             src="/images/farmers-mandi.jpg"
@@ -252,7 +254,6 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
           </p>
         </div>
 
-        {/* Pillar 3: Dedicated External Weather Outlook & Rainfall Lag Intelligence */}
         <div className="glass-panel-mint" style={{ padding: '1.5rem' }}>
           <div
             className="neo-inset"
@@ -294,7 +295,6 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
             Coastal Andhra, Rayalaseema, North &amp; South Telangana, Nashik, and Kolar.
           </p>
         </div>
-      
       </section>
 
       {/* 3. Historical Agricultural Events & Weather Shocks Timeline */}

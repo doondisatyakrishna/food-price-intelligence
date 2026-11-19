@@ -1,13 +1,27 @@
 import os
-from sqlalchemy import Column, Date, Float, ForeignKey, Integer, String, create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy import (
+    Column,
+    Date,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
 
 
 class Market(Base):
   __tablename__ = "markets"
+  __table_args__ = (
+      UniqueConstraint(
+          "name", "district", "state", name="uq_market_name_district_state"
+      ),
+  )
 
   id = Column(Integer, primary_key=True, autoincrement=True)
   name = Column(String(100), nullable=False)
@@ -25,6 +39,15 @@ class Commodity(Base):
 
 class DailyPrice(Base):
   __tablename__ = "daily_prices"
+  __table_args__ = (
+      UniqueConstraint(
+          "market_id",
+          "commodity_id",
+          "date",
+          name="uq_daily_price_mkt_comm_date",
+      ),
+      Index("ix_daily_prices_date", "date"),
+  )
 
   id = Column(Integer, primary_key=True, autoincrement=True)
   market_id = Column(Integer, ForeignKey("markets.id"), nullable=False)
@@ -37,6 +60,9 @@ class DailyPrice(Base):
 
 class WeatherData(Base):
   __tablename__ = "weather_data"
+  __table_args__ = (
+      UniqueConstraint("region_name", "date", name="uq_weather_region_date"),
+  )
 
   id = Column(Integer, primary_key=True, autoincrement=True)
   region_name = Column(String(100), nullable=False)
@@ -47,7 +73,6 @@ class WeatherData(Base):
 
 
 def init_db(db_url="sqlite:///data/food_price_intelligence.db"):
-  # Ensures the data directory exists if running from root
   os.makedirs("data", exist_ok=True)
   engine = create_engine(db_url)
   Base.metadata.create_all(engine)

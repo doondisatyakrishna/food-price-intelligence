@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -42,10 +42,11 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
   const [priceShockPct, setPriceShockPct] = useState(0);
 
   const [forecast, setForecast] = useState(null);
-  const [isSimulating, setIsSimulating] = useState(false);
+  const [completedForecastKey, setCompletedForecastKey] = useState('');
   const [history, setHistory] = useState([]);
   const [mandisData, setMandisData] = useState(null);
   const [weather, setWeather] = useState(null);
+  const [weatherError, setWeatherError] = useState('');
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState('');
 
@@ -57,11 +58,10 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     return filtered.length > 0 ? filtered : ['Tomato'];
   }, [catalog, selectedRegion]);
 
-  useEffect(() => {
-    if (availableCommodities.length > 0 && !availableCommodities.includes(selectedCommodity)) {
-      setSelectedCommodity(availableCommodities[0]);
-    }
-  }, [availableCommodities, selectedCommodity]);
+  // Derived active commodity avoids cascading setState inside useEffect
+  const effectiveCommodity = availableCommodities.includes(selectedCommodity)
+    ? selectedCommodity
+    : availableCommodities[0] || 'Tomato';
 
   const handleRegionChange = useCallback(
     (newRegion) => {
@@ -88,15 +88,15 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
   useEffect(() => {
     let active = true;
     async function loadMarketData() {
-      if (!selectedRegion || !selectedCommodity) return;
-      setError('');
+      if (!selectedRegion || !effectiveCommodity) return;
       try {
         const [historyRes, mandisRes, alertsRes] = await Promise.all([
-          api.getHistory(selectedRegion, selectedCommodity, historyLimit, onTelemetry),
-          api.getMandiLeaderboard(selectedRegion, selectedCommodity, onTelemetry),
+          api.getHistory(selectedRegion, effectiveCommodity, historyLimit, onTelemetry),
+          api.getMandiLeaderboard(selectedRegion, effectiveCommodity, onTelemetry),
           api.getAlerts(false, onTelemetry),
         ]);
         if (!active) return;
+        setError('');
         setHistory(historyRes?.data || []);
         setMandisData(mandisRes);
         setAlerts(alertsRes?.alerts || []);
@@ -108,44 +108,62 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     return () => {
       active = false;
     };
-  }, [selectedRegion, selectedCommodity, historyLimit, syncCompletedAt, onTelemetry]);
+  }, [selectedRegion, effectiveCommodity, historyLimit, syncCompletedAt, onTelemetry]);
+
+  const activeForecastKey = `${selectedRegion}|${effectiveCommodity}|${rainDeltaMm}|${priceShockPct}|${syncCompletedAt ?? ''}`;
 
   useEffect(() => {
     let active = true;
     const isWhatIf = rainDeltaMm !== 0 || priceShockPct !== 0;
-    if (isWhatIf) setIsSimulating(true);
 
     api
       .getForecast(
         selectedRegion,
-        selectedCommodity,
+        effectiveCommodity,
         isWhatIf ? null : onTelemetry,
         { rain_21d_delta_mm: rainDeltaMm, price_shock_pct: priceShockPct }
       )
       .then((res) => {
-        if (active) setForecast(res);
+        if (active) {
+          setError('');
+          setForecast(res);
+        }
       })
       .catch((err) => {
         if (active) setError(err.message || 'Forecast error.');
       })
       .finally(() => {
-        if (active) setIsSimulating(false);
+        if (active) setCompletedForecastKey(activeForecastKey);
       });
 
     return () => {
       active = false;
     };
-  }, [selectedRegion, selectedCommodity, rainDeltaMm, priceShockPct, syncCompletedAt, onTelemetry]);
+  }, [
+    selectedRegion,
+    effectiveCommodity,
+    rainDeltaMm,
+    priceShockPct,
+    syncCompletedAt,
+    onTelemetry,
+    activeForecastKey,
+  ]);
 
   useEffect(() => {
     let active = true;
     api
       .getWeatherForecast(selectedWeatherHub, 14, onTelemetry)
       .then((res) => {
-        if (active) setWeather(res);
+        if (active) {
+          setWeatherError('');
+          setWeather(res);
+        }
       })
-      .catch(() => {
-        if (active) setWeather(null);
+      .catch((err) => {
+        if (active) {
+          setWeather(null);
+          setWeatherError(err.message || 'Regional weather outlook temporarily unavailable.');
+        }
       });
     return () => {
       active = false;
@@ -153,6 +171,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
   }, [selectedWeatherHub, onTelemetry]);
 
   const isWhatIfActive = rainDeltaMm !== 0 || priceShockPct !== 0;
+  const isSimulating = isWhatIfActive && completedForecastKey !== activeForecastKey;
   const pred7d = forecast?.forecasts?.find((f) => f.horizon_days === 7);
   const pred14d = forecast?.forecasts?.find((f) => f.horizon_days === 14);
   const activeMonthIndex = forecast?.reference_date
@@ -212,7 +231,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--emerald-primary)', marginBottom: '0.3rem', fontWeight: 800 }}>
               COMMODITY
             </label>
-            <select className="neo-select" value={selectedCommodity} onChange={(e) => setSelectedCommodity(e.target.value)}>
+            <select className="neo-select" value={effectiveCommodity} onChange={(e) => setSelectedCommodity(e.target.value)}>
               {availableCommodities.map((comm) => (
                 <option key={comm} value={comm}>{comm}</option>
               ))}
@@ -319,8 +338,8 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
       {/* 4. Balanced 2-Column Upper Analytics Deck */}
       <section className="analytics-split-grid">
         <div className="analytics-col">
-          <PriceTrajectoryChart history={history} selectedRegion={selectedRegion} selectedCommodity={selectedCommodity} />
-          <CropCalendarCard selectedCommodity={selectedCommodity} activeMonthIndex={activeMonthIndex} />
+          <PriceTrajectoryChart history={history} selectedRegion={selectedRegion} selectedCommodity={effectiveCommodity} />
+          <CropCalendarCard selectedCommodity={effectiveCommodity} activeMonthIndex={activeMonthIndex} />
         </div>
 
         <div className="analytics-col">
@@ -329,6 +348,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             selectedWeatherHub={selectedWeatherHub}
             onSelectWeatherHub={setSelectedWeatherHub}
             weather={weather}
+            weatherError={weatherError}
           />
 
           <div className="glass-panel" style={{ padding: '1.45rem', flex: 1 }}>
@@ -376,7 +396,7 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
       </section>
 
       {/* 5. Full-Width Horizontal District & Mandi Price Leaderboard */}
-      <MandiLeaderboard selectedRegion={selectedRegion} selectedCommodity={selectedCommodity} mandisData={mandisData} />
+      <MandiLeaderboard selectedRegion={selectedRegion} selectedCommodity={effectiveCommodity} mandisData={mandisData} />
     </main>
   );
 }
