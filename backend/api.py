@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.db import cache_get, cache_set, get_db_connection
+from backend.sync_manager import get_sync_status, run_catchup_sync
 from backend.ml_service import (
     clear_ml_models,
     generate_price_forecast,
