@@ -1,5 +1,6 @@
 from collections import defaultdict
 from contextlib import asynccontextmanager
+import gc
 import json
 import os
 from pathlib import Path
@@ -116,9 +117,17 @@ RATE_LIMIT_MAX_REQUESTS = 90
 RATE_LIMIT_WINDOW_SEC = 60
 
 
+def _delayed_startup_sync():
+  """Runs background catch-up sync after initial page-load traffic settles and frees RAM."""
+  try:
+    run_catchup_sync(bypass_cooldown=True)
+  finally:
+    gc.collect()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-  """Loads trained ML pipelines once at startup and launches background sync."""
+  """Loads trained ML pipelines once at startup and schedules deferred background sync."""
   path_7d = MODEL_DIR / "price_forecaster_7d.joblib"
   path_14d = MODEL_DIR / "price_forecaster_14d.joblib"
   metrics_path = MODEL_DIR / "training_metrics.json"
@@ -131,12 +140,15 @@ async def lifespan(app: FastAPI):
     with open(metrics_path, "r") as f:
       ml_state["metrics"] = json.load(f)
 
-  threading.Thread(
-      target=run_catchup_sync, kwargs={"bypass_cooldown": True}, daemon=True
-  ).start()
+  # Let initial dashboard requests finish before sync competes for worker memory.
+  startup_timer = threading.Timer(45.0, _delayed_startup_sync)
+  startup_timer.daemon = True
+  startup_timer.start()
 
   yield
+  startup_timer.cancel()
   ml_state.clear()
+  gc.collect()
 
 
 app = FastAPI(
@@ -479,18 +491,16 @@ def get_mandi_leaderboard(
   return result
 
 
-# --- Sub-Regional 14-Day Weather Forecast (External Open-Meteo Service) ---
+# --- Sub-Regional 14-Day Weather Forecast (Resilient Open-Meteo + SQLite Fallback) ---
 
+_stale_weather_backup: dict[str, dict] = {}
 
 @app.get("/api/weather-forecast")
 def get_regional_weather_forecast(
     region_name: str = Query("Coastal Andhra", examples=["Coastal Andhra"]),
     days: int = Query(14, ge=3, le=16),
 ):
-  """Fetches Open-Meteo's official 14-day meteorological forecast for a specific
-
-  sub-regional agro-climatic hub and returns full location & coordinate
-  details.
+  """Fetches Open-Meteo forecast with cached and observed-weather fallbacks.
   """
   hub_key = DEFAULT_HUB_BY_REGION.get(region_name, region_name)
   if hub_key not in WEATHER_HUBS:
@@ -512,61 +522,118 @@ def get_regional_weather_forecast(
 
   url = (
       f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-      f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max"
+      "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max"
       f"&timezone=Asia/Kolkata&forecast_days={days}"
   )
-  resp = requests.get(url, timeout=20)
-  if resp.status_code != 200:
-    raise HTTPException(
-        status_code=502, detail="Failed to reach Open-Meteo forecast service."
-    )
+  try:
+    resp = requests.get(url, timeout=8)
+    resp.raise_for_status()
+    daily = resp.json().get("daily", {})
 
-  daily = resp.json().get("daily", {})
-  dates = daily.get("time", [])
-  t_max = daily.get("temperature_2m_max", [])
-  t_min = daily.get("temperature_2m_min", [])
-  precip = daily.get("precipitation_sum", [])
-  prob = daily.get("precipitation_probability_max", [])
+    dates = daily.get("time", [])
+    t_max = daily.get("temperature_2m_max", [])
+    t_min = daily.get("temperature_2m_min", [])
+    precip = daily.get("precipitation_sum", [])
+    prob = daily.get("precipitation_probability_max", [])
 
-  forecast_days = []
-  total_rain = 0.0
-  heavy_rain_days = 0
+    forecast_days = []
+    total_rain = 0.0
+    heavy_rain_days = 0
 
-  for i, d_str in enumerate(dates):
-    rain_mm = float(precip[i] or 0.0)
-    total_rain += rain_mm
-    is_heavy = rain_mm >= 25.0
-    if is_heavy:
-      heavy_rain_days += 1
+    for i, d_str in enumerate(dates):
+      rain_mm = float(precip[i] or 0.0)
+      total_rain += rain_mm
+      is_heavy = rain_mm >= 25.0
+      if is_heavy:
+        heavy_rain_days += 1
 
-    forecast_days.append({
-        "date": d_str,
-        "temp_max_c": t_max[i],
-        "temp_min_c": t_min[i],
-        "precipitation_mm": round(rain_mm, 1),
-        "rain_probability_pct": prob[i],
-        "supply_risk_flag": "HIGH_RAIN_RISK" if is_heavy else "NORMAL",
-    })
+      forecast_days.append({
+          "date": d_str,
+          "temp_max_c": t_max[i],
+          "temp_min_c": t_min[i],
+          "precipitation_mm": round(rain_mm, 1),
+          "rain_probability_pct": prob[i],
+          "supply_risk_flag": "HIGH_RAIN_RISK" if is_heavy else "NORMAL",
+      })
 
-  result = {
-      "hub_id": hub_key,
-      "location_label": hub["label"],
-      "districts_covered": hub["districts"],
-      "coordinates": {"lat": lat, "lon": lon},
-      "source": "Open-Meteo Official Meteorological Forecast API",
-      "horizon_days": len(forecast_days),
-      "total_expected_rain_mm": round(total_rain, 1),
-      "heavy_rain_days_count": heavy_rain_days,
-      "outlook_summary": (
-          f"{heavy_rain_days} heavy rain day(s) expected — monitor harvest &"
-          " transit delays."
-          if heavy_rain_days > 0
-          else "Dry/moderate conditions — low weather-driven arrival disruption."
-      ),
-      "daily": forecast_days,
-  }
-  cache_set(c_key, result, ttl=1800)
-  return result
+    result = {
+        "hub_id": hub_key,
+        "location_label": hub["label"],
+        "districts_covered": hub["districts"],
+        "coordinates": {"lat": lat, "lon": lon},
+        "source": "Open-Meteo Official Meteorological Forecast API",
+        "horizon_days": len(forecast_days),
+        "total_expected_rain_mm": round(total_rain, 1),
+        "heavy_rain_days_count": heavy_rain_days,
+        "outlook_summary": (
+            f"{heavy_rain_days} heavy rain day(s) expected — monitor harvest &"
+            " transit delays."
+            if heavy_rain_days > 0
+            else (
+                "Dry/moderate conditions — low weather-driven arrival"
+                " disruption."
+            )
+        ),
+        "daily": forecast_days,
+    }
+    cache_set(c_key, result, ttl=1800)
+    _stale_weather_backup[hub_key] = result
+    return result
+
+  except requests.RequestException:
+    if hub_key in _stale_weather_backup:
+      return _stale_weather_backup[hub_key]
+
+    conn = get_db_connection()
+    try:
+      rows = conn.execute(
+          """
+          SELECT date, temperature_max_c, temperature_min_c, precipitation_mm
+          FROM weather_data
+          WHERE region_name = ?
+          ORDER BY date DESC
+          LIMIT 5
+          """,
+          (hub["state_group"],),
+      ).fetchall()
+    finally:
+      conn.close()
+
+    fallback_days = [
+        {
+            "date": str(r["date"])[:10],
+            "temp_max_c": r["temperature_max_c"],
+            "temp_min_c": r["temperature_min_c"],
+            "precipitation_mm": round(float(r["precipitation_mm"] or 0.0), 1),
+            "rain_probability_pct": None,
+            "supply_risk_flag": (
+                "HIGH_RAIN_RISK"
+                if float(r["precipitation_mm"] or 0.0) >= 25.0
+                else "NORMAL"
+            ),
+        }
+        for r in reversed(rows)
+    ]
+
+    return {
+        "hub_id": hub_key,
+        "location_label": hub["label"],
+        "districts_covered": hub["districts"],
+        "coordinates": {"lat": lat, "lon": lon},
+        "source": "Recent Regional Baseline (Open-Meteo temporarily busy)",
+        "horizon_days": len(fallback_days),
+        "total_expected_rain_mm": round(
+            sum(d["precipitation_mm"] for d in fallback_days), 1
+        ),
+        "heavy_rain_days_count": sum(
+            1 for d in fallback_days if d["precipitation_mm"] >= 25.0
+        ),
+        "outlook_summary": (
+            "Live forecast feed temporarily busy — displaying latest regional"
+            " observations."
+        ),
+        "daily": fallback_days,
+    }
 
 
 # --- ML Price Forecast + Interactive "What-If" Shock Simulator ---
