@@ -14,6 +14,13 @@ import WeatherOutlookCard from './dashboard/WeatherOutlookCard';
 import CropCalendarCard from './dashboard/CropCalendarCard';
 import MandiLeaderboard from './dashboard/MandiLeaderboard';
 
+const fixedSelectStyle = {
+  width: '220px',
+  textOverflow: 'ellipsis',
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+};
+
 export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt }) {
   const regions = useMemo(
     () => catalog?.regions || ['Andhra Pradesh', 'Telangana', 'Nashik', 'Kolar'],
@@ -209,43 +216,57 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
       <section
         className="glass-panel"
         style={{
-          padding: '1.15rem 1.45rem',
+          padding: '1.15rem 1.4rem',
           marginBottom: '1.4rem',
           display: 'flex',
           flexWrap: 'wrap',
-          alignItems: 'center',
-          justifyContent: 'space-between',
+          alignItems: 'flex-end',
           gap: '1rem',
         }}
       >
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem' }}>
-          <div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '1rem' }}>
+          <div style={{ flexShrink: 0 }}>
             <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--emerald-primary)', marginBottom: '0.3rem', fontWeight: 800 }}>
               STATE / MANDI HUB
             </label>
-            <select className="neo-select" value={selectedRegion} onChange={(e) => handleRegionChange(e.target.value)}>
+            <select
+              className="neo-select"
+              value={selectedRegion}
+              onChange={(e) => handleRegionChange(e.target.value)}
+              style={{ ...fixedSelectStyle, width: '215px' }}
+            >
               {regions.map((reg) => (
                 <option key={reg} value={reg}>{reg}</option>
               ))}
             </select>
           </div>
 
-          <div>
+          <div style={{ flexShrink: 0 }}>
             <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--emerald-primary)', marginBottom: '0.3rem', fontWeight: 800 }}>
               COMMODITY
             </label>
-            <select className="neo-select" value={effectiveCommodity} onChange={(e) => setSelectedCommodity(e.target.value)}>
+            <select
+              className="neo-select"
+              value={effectiveCommodity}
+              onChange={(e) => setSelectedCommodity(e.target.value)}
+              style={{ ...fixedSelectStyle, width: '240px' }}
+            >
               {availableCommodities.map((comm) => (
                 <option key={comm} value={comm}>{comm}</option>
               ))}
             </select>
           </div>
 
-          <div>
+          <div style={{ flexShrink: 0 }}>
             <label style={{ display: 'block', fontSize: '0.72rem', color: 'var(--emerald-primary)', marginBottom: '0.3rem', fontWeight: 800 }}>
               CHART WINDOW
             </label>
-            <select className="neo-select" value={historyLimit} onChange={(e) => setHistoryLimit(Number(e.target.value))}>
+            <select
+              className="neo-select"
+              value={historyLimit}
+              onChange={(e) => setHistoryLimit(Number(e.target.value))}
+              style={{ ...fixedSelectStyle, width: '205px' }}
+            >
               <option value={60}>Last 60 Trading Days</option>
               <option value={120}>Last 120 Trading Days</option>
               <option value={250}>Last 1 Year (~250 Days)</option>
@@ -255,7 +276,22 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         </div>
 
         {forecast && (
-          <div className="neo-inset" style={{ padding: '0.72rem 1.15rem', display: 'flex', alignItems: 'center', gap: '1.15rem', fontSize: '0.83rem', flexWrap: 'wrap' }}>
+          <div
+            className="neo-inset"
+            style={{
+              marginLeft: 'auto',
+              flexShrink: 0,
+              maxWidth: '100%',
+              boxSizing: 'border-box',
+              whiteSpace: 'nowrap',
+              padding: '0.62rem 1rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '1rem',
+              fontSize: '0.82rem',
+              flexWrap: 'wrap',
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <Calendar size={15} color="var(--emerald-primary)" />
               <span style={{ color: 'var(--text-muted)' }}>Latest Quote:</span>
