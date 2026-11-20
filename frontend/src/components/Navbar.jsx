@@ -101,21 +101,39 @@ export default function Navbar({
             <span>Live Dashboard</span>
           </button>
 
-          <button
-            className="neo-button"
-            onClick={onTriggerSync}
-            disabled={isSyncing}
-            title={syncStatus?.last_message || 'Catch up missing days from data.gov.in & Open-Meteo'}
-          >
-            <RefreshCw size={16} className={isSyncing ? 'spin' : ''} color="var(--emerald-primary)" />
-            <span>
-              {isSyncing
-                ? 'Syncing...'
-                : cooldown > 0
-                ? `Synced (${Math.ceil(cooldown / 60)}m)`
-                : 'Sync Latest Data'}
+          {syncStatus?.live_sync_disabled ? (
+            <span
+              className="badge-pill"
+              title="Database & ML models update automatically every Sunday via GitHub Actions"
+              style={{
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                padding: '0.35rem 0.75rem',
+                color: 'var(--text-muted)',
+                background: 'rgba(16, 185, 129, 0.08)',
+                border: '1px solid rgba(16, 185, 129, 0.2)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Auto-Sync: Sundays
             </span>
-          </button>
+          ) : (
+            <button
+              className="neo-button"
+              onClick={onTriggerSync}
+              disabled={isSyncing}
+              title={syncStatus?.last_message || 'Catch up missing days from data.gov.in & Open-Meteo'}
+            >
+              <RefreshCw size={16} className={isSyncing ? 'spin' : ''} color="var(--emerald-primary)" />
+              <span>
+                {isSyncing
+                  ? 'Syncing...'
+                  : cooldown > 0
+                    ? `Synced (${Math.ceil(cooldown / 60)}m)`
+                    : 'Sync Latest Data'}
+              </span>
+            </button>
+          )}
         </div>
       </div>
     </header>

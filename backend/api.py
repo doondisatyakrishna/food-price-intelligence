@@ -431,7 +431,10 @@ def trigger_sync(x_sync_key: str | None = Header(default=None)):
 
 @app.get("/api/sync/status")
 def sync_status_endpoint():
-  return get_sync_status()
+  return {
+      **get_sync_status(),
+      "live_sync_disabled": LIVE_SYNC_DISABLED,
+  }
 
 
 # Mount compiled React frontend with strict path-traversal containment (S1)
