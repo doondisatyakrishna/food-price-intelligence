@@ -60,13 +60,8 @@ def load_feature_data() -> pd.DataFrame:
   return df
 
 
-def build_model_pipeline() -> Pipeline:
-  """Builds an end-to-end preprocessing + gradient boosting pipeline.
-
-  Bundling the encoder and regressor inside a single Pipeline guarantees
-  that FastAPI inference applies the exact same transformations during
-  prediction.
-  """
+def build_model_pipeline(horizon_days: int = 7) -> Pipeline:
+  """Builds an end-to-end preprocessing + gradient boosting pipeline."""
   preprocessor = ColumnTransformer(
       transformers=[
           (
@@ -80,21 +75,36 @@ def build_model_pipeline() -> Pipeline:
       ]
   )
 
-  # HistGradientBoostingRegressor is scikit-learn's fast LightGBM equivalent
-  # L1 loss ('absolute_error') makes predictions robust against sudden mandi price spikes
-  regressor = HistGradientBoostingRegressor(
-      loss="absolute_error",
-      max_iter=300,
-      learning_rate=0.05,
-      max_leaf_nodes=31,
-      min_samples_leaf=30,
-      l2_regularization=1.0,
-      categorical_features=[0, 1],  # Indices of region_name and commodity
-      random_state=42,
-  )
+  if horizon_days >= 14:
+    regressor = HistGradientBoostingRegressor(
+        loss="absolute_error",
+        max_iter=200,
+        learning_rate=0.03,
+        max_leaf_nodes=15,
+        min_samples_leaf=60,
+        l2_regularization=5.0,
+        early_stopping=True,
+        validation_fraction=0.15,
+        n_iter_no_change=15,
+        categorical_features=[0, 1],
+        random_state=42,
+    )
+  else:
+    regressor = HistGradientBoostingRegressor(
+        loss="absolute_error",
+        max_iter=300,
+        learning_rate=0.04,
+        max_leaf_nodes=23,
+        min_samples_leaf=40,
+        l2_regularization=2.0,
+        early_stopping=True,
+        validation_fraction=0.15,
+        n_iter_no_change=15,
+        categorical_features=[0, 1],
+        random_state=42,
+    )
 
   return Pipeline(steps=[("preprocessor", preprocessor), ("model", regressor)])
-
 
 def train_and_evaluate_horizon(df: pd.DataFrame, horizon_days: int):
   """Trains a forecasting model for a given horizon (7 or 14 days),
@@ -143,7 +153,7 @@ def train_and_evaluate_horizon(df: pd.DataFrame, horizon_days: int):
   current_test_price = test_df["median_modal_price"].values
 
   # 3. Fit the ML pipeline
-  pipeline = build_model_pipeline()
+  pipeline = build_model_pipeline(horizon_days=horizon_days)
   pipeline.fit(X_train, y_train_return)
 
   # 4. Predict future return and convert back to ₹/Quintal

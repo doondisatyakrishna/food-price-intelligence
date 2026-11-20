@@ -1,18 +1,18 @@
 {
   "7d": {
-    "mae_inr": 810.42,
-    "mape_pct": 21.34,
-    "baseline_mae_inr": 825.09,
-    "improvement_pct": 1.78,
-    "test_start": "2025-04-03",
+    "mae_inr": 901.24,
+    "mape_pct": 23.96,
+    "baseline_mae_inr": 928.75,
+    "improvement_pct": 2.96,
+    "test_start": "2025-12-02",
     "test_end": "2026-07-24"
   },
   "14d": {
-    "mae_inr": 976.74,
-    "mape_pct": 26.66,
-    "baseline_mae_inr": 913.56,
-    "improvement_pct": -6.92,
-    "test_start": "2025-03-25",
+    "mae_inr": 961.79,
+    "mape_pct": 25.6,
+    "baseline_mae_inr": 934.14,
+    "improvement_pct": -2.96,
+    "test_start": "2025-11-17",
     "test_end": "2026-07-17"
   }
 }

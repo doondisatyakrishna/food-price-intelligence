@@ -7,14 +7,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "food_price_intelligence.db"
 
 MIN_TRADING_DAYS = 30
+DISTRICT_ALIASES = {"Chittor": "Chittoor"}
 
 
 def load_and_clean_raw_data(db_path: Path):
-  """Loads Andhra Pradesh mandi prices and weather from SQLite.
+  """Loads Andhra Pradesh & Telangana mandi prices and weather from SQLite.
 
-  Produces both state-wide ('Andhra Pradesh') and per-district ('<District>')
-  series so forecasts and charts can target Andhra Pradesh or any individual AP
-  district.
+  Produces both state-wide ('Andhra Pradesh', 'Telangana') and per-district
+  series, along with a mapping from each region_name to its state weather key.
   """
   conn = sqlite3.connect(db_path)
 
@@ -32,7 +32,7 @@ def load_and_clean_raw_data(db_path: Path):
     JOIN markets m ON dp.market_id = m.id
     JOIN commodities c ON dp.commodity_id = c.id
     WHERE dp.modal_price_inr > 0
-      AND lower(m.state) = 'andhra pradesh'
+      AND lower(m.state) IN ('andhra pradesh', 'telangana')
     """
   df_prices = pd.read_sql_query(prices_sql, conn, parse_dates=["date"])
   df_weather = pd.read_sql_query(
@@ -48,18 +48,31 @@ def load_and_clean_raw_data(db_path: Path):
     )
 
   if df_prices.empty:
-    return pd.DataFrame(), df_weather
+    return pd.DataFrame(), df_weather, {}
 
-  # 1. State-wide Andhra Pradesh aggregate series
+  df_prices["district"] = (
+      df_prices["district"].fillna("").str.strip().replace(DISTRICT_ALIASES)
+  )
+
+  # Map each district to its parent state so weather lookup matches AP or Telangana
+  region_to_state = {
+      "Andhra Pradesh": "Andhra Pradesh",
+      "Telangana": "Telangana",
+  }
+  for dist, st in (
+      df_prices[df_prices["district"] != ""][["district", "state"]]
+      .drop_duplicates()
+      .itertuples(index=False)
+  ):
+    region_to_state[dist] = st
+
+  # 1. State-wide aggregates (Andhra Pradesh & Telangana)
   state_df = df_prices.copy()
-  state_df["region_name"] = "Andhra Pradesh"
+  state_df["region_name"] = state_df["state"]
 
-  # 2. District-level series for every Andhra Pradesh district
-  district_df = df_prices[
-      df_prices["district"].notna()
-      & (df_prices["district"].str.strip() != "")
-  ].copy()
-  district_df["region_name"] = district_df["district"].str.strip()
+  # 2. District-level series for every AP & Telangana district
+  district_df = df_prices[df_prices["district"] != ""].copy()
+  district_df["region_name"] = district_df["district"]
 
   combined_prices = pd.concat([state_df, district_df], ignore_index=True)
 
@@ -75,13 +88,12 @@ def load_and_clean_raw_data(db_path: Path):
       .reset_index()
   )
 
-  return daily_prices, df_weather
+  return daily_prices, df_weather, region_to_state
 
 
 def _get_weather_for_region(
-    df_weather: pd.DataFrame, region_name: str
+    df_weather: pd.DataFrame, region_name: str, state_fallback: str
 ) -> pd.DataFrame:
-  """Returns weather for region_name, falling back to Andhra Pradesh weather."""
   if df_weather.empty:
     return pd.DataFrame(
         columns=[
@@ -94,9 +106,7 @@ def _get_weather_for_region(
 
   w_sub = df_weather[df_weather["region_name"] == region_name]
   if w_sub.empty:
-    w_sub = df_weather[
-        df_weather["region_name"].str.contains("andhra", case=False, na=False)
-    ]
+    w_sub = df_weather[df_weather["region_name"] == state_fallback]
   if w_sub.empty:
     w_sub = df_weather
 
@@ -110,11 +120,6 @@ def _get_weather_for_region(
 def engineer_series_features(
     price_group: pd.DataFrame, weather_region: pd.DataFrame
 ) -> pd.DataFrame:
-  """Aligns a single (region, commodity) series onto a continuous daily calendar
-
-  and computes price momentum, early-warning Z-scores, weather lags, and ML
-  targets.
-  """
   price_group = price_group.sort_values("date").copy()
 
   full_dates = pd.date_range(
@@ -190,9 +195,9 @@ def engineer_series_features(
 
 
 def build_feature_store():
-  daily_prices, df_weather = load_and_clean_raw_data(DB_PATH)
+  daily_prices, df_weather, region_to_state = load_and_clean_raw_data(DB_PATH)
   if daily_prices.empty:
-    print("No Andhra Pradesh price rows found in database.")
+    print("No Andhra Pradesh / Telangana price rows found in database.")
     return
 
   counts = (
@@ -202,7 +207,7 @@ def build_feature_store():
   )
   qualified = counts[counts["days"] >= MIN_TRADING_DAYS]
   print(
-      f"Qualified AP series (>= {MIN_TRADING_DAYS} trading days):"
+      f"Qualified AP + Telangana series (>= {MIN_TRADING_DAYS} trading days):"
       f" {len(qualified)} pairs"
   )
 
@@ -215,7 +220,9 @@ def build_feature_store():
         (daily_prices["region_name"] == reg)
         & (daily_prices["commodity"] == comm)
     ]
-    w_sub = _get_weather_for_region(df_weather, reg)
+    w_sub = _get_weather_for_region(
+        df_weather, reg, region_to_state.get(reg, "Andhra Pradesh")
+    )
 
     feat_df = engineer_series_features(p_sub, w_sub)
     feat_df["region_name"] = reg
@@ -244,7 +251,7 @@ def build_feature_store():
       " 'engineered_features' table."
   )
   print(
-      "AP regions/districts in feature store:",
+      "Regions/Districts in feature store:",
       sorted(final_df["region_name"].unique().tolist())
       if not final_df.empty
       else [],
