@@ -6,16 +6,20 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "food_price_intelligence.db"
 
-# 30 trading days (~6 weeks) allows recent data.gov.in series (like Telangana) to qualify
 MIN_TRADING_DAYS = 30
 
 
 def load_and_clean_raw_data(db_path: Path):
-  """Loads normalized SQLite tables, removes anomalies, and deduplicates weather."""
+  """Loads Andhra Pradesh mandi prices and weather from SQLite.
+
+  Produces both state-wide ('Andhra Pradesh') and per-district ('<District>')
+  series so forecasts and charts can target Andhra Pradesh or any individual AP
+  district.
+  """
   conn = sqlite3.connect(db_path)
 
   prices_sql = """
-    SELECT 
+    SELECT
         dp.date,
         m.state,
         m.district,
@@ -28,6 +32,7 @@ def load_and_clean_raw_data(db_path: Path):
     JOIN markets m ON dp.market_id = m.id
     JOIN commodities c ON dp.commodity_id = c.id
     WHERE dp.modal_price_inr > 0
+      AND lower(m.state) = 'andhra pradesh'
     """
   df_prices = pd.read_sql_query(prices_sql, conn, parse_dates=["date"])
   df_weather = pd.read_sql_query(
@@ -35,23 +40,31 @@ def load_and_clean_raw_data(db_path: Path):
   )
   conn.close()
 
-  # Deduplicate weather snapshots per region and date
-  df_weather = (
-      df_weather.sort_values("date")
-      .drop_duplicates(subset=["region_name", "date"], keep="last")
-      .copy()
-  )
+  if not df_weather.empty:
+    df_weather = (
+        df_weather.sort_values("date")
+        .drop_duplicates(subset=["region_name", "date"], keep="last")
+        .copy()
+    )
 
-  # Group both Telugu states at the state level to match weather_data.region_name,
-  # while keeping standalone hubs (Nashik, Kolar) at the district level
-  df_prices["region_name"] = np.where(
-      df_prices["state"].isin(["Andhra Pradesh", "Telangana"]),
-      df_prices["state"],
-      df_prices["district"],
-  )
+  if df_prices.empty:
+    return pd.DataFrame(), df_weather
+
+  # 1. State-wide Andhra Pradesh aggregate series
+  state_df = df_prices.copy()
+  state_df["region_name"] = "Andhra Pradesh"
+
+  # 2. District-level series for every Andhra Pradesh district
+  district_df = df_prices[
+      df_prices["district"].notna()
+      & (df_prices["district"].str.strip() != "")
+  ].copy()
+  district_df["region_name"] = district_df["district"].str.strip()
+
+  combined_prices = pd.concat([state_df, district_df], ignore_index=True)
 
   daily_prices = (
-      df_prices.groupby(["region_name", "commodity", "date"])
+      combined_prices.groupby(["region_name", "commodity", "date"])
       .agg(
           mandi_count=("market_name", "nunique"),
           median_modal_price=("modal_price_inr", "median"),
@@ -63,6 +76,35 @@ def load_and_clean_raw_data(db_path: Path):
   )
 
   return daily_prices, df_weather
+
+
+def _get_weather_for_region(
+    df_weather: pd.DataFrame, region_name: str
+) -> pd.DataFrame:
+  """Returns weather for region_name, falling back to Andhra Pradesh weather."""
+  if df_weather.empty:
+    return pd.DataFrame(
+        columns=[
+            "date",
+            "temperature_max_c",
+            "temperature_min_c",
+            "precipitation_mm",
+        ]
+    )
+
+  w_sub = df_weather[df_weather["region_name"] == region_name]
+  if w_sub.empty:
+    w_sub = df_weather[
+        df_weather["region_name"].str.contains("andhra", case=False, na=False)
+    ]
+  if w_sub.empty:
+    w_sub = df_weather
+
+  return (
+      w_sub.sort_values("date")
+      .drop_duplicates(subset=["date"], keep="last")
+      .copy()
+  )
 
 
 def engineer_series_features(
@@ -113,17 +155,13 @@ def engineer_series_features(
       default="NORMAL",
   )
 
-  merged = pd.merge(
-      merged,
-      weather_region[[
-          "date",
-          "temperature_max_c",
-          "temperature_min_c",
-          "precipitation_mm",
-      ]],
-      on="date",
-      how="left",
-  )
+  weather_cols = weather_region[[
+      "date",
+      "temperature_max_c",
+      "temperature_min_c",
+      "precipitation_mm",
+  ]]
+  merged = pd.merge(merged, weather_cols, on="date", how="left")
 
   merged["rain_7d_sum"] = (
       merged["precipitation_mm"].rolling(window=7, min_periods=1).sum()
@@ -153,6 +191,9 @@ def engineer_series_features(
 
 def build_feature_store():
   daily_prices, df_weather = load_and_clean_raw_data(DB_PATH)
+  if daily_prices.empty:
+    print("No Andhra Pradesh price rows found in database.")
+    return
 
   counts = (
       daily_prices.groupby(["region_name", "commodity"])
@@ -161,7 +202,7 @@ def build_feature_store():
   )
   qualified = counts[counts["days"] >= MIN_TRADING_DAYS]
   print(
-      f"Qualified core series (>= {MIN_TRADING_DAYS} trading days):"
+      f"Qualified AP series (>= {MIN_TRADING_DAYS} trading days):"
       f" {len(qualified)} pairs"
   )
 
@@ -174,19 +215,28 @@ def build_feature_store():
         (daily_prices["region_name"] == reg)
         & (daily_prices["commodity"] == comm)
     ]
-    w_sub = df_weather[df_weather["region_name"] == reg]
+    w_sub = _get_weather_for_region(df_weather, reg)
 
     feat_df = engineer_series_features(p_sub, w_sub)
     feat_df["region_name"] = reg
     feat_df["commodity"] = comm
     all_features.append(feat_df)
 
-  final_df = pd.concat(all_features, ignore_index=True)
+  final_df = (
+      pd.concat(all_features, ignore_index=True)
+      if all_features
+      else pd.DataFrame()
+  )
 
   conn = sqlite3.connect(DB_PATH)
   final_df.to_sql(
       "engineered_features", conn, if_exists="replace", index=False
   )
+  conn.execute("""
+        CREATE INDEX IF NOT EXISTS ix_engineered_features_series_date
+        ON engineered_features (region_name, commodity, date);
+        """)
+  conn.commit()
   conn.close()
 
   print(
@@ -194,8 +244,10 @@ def build_feature_store():
       " 'engineered_features' table."
   )
   print(
-      "Regions in feature store:",
-      sorted(final_df["region_name"].unique().tolist()),
+      "AP regions/districts in feature store:",
+      sorted(final_df["region_name"].unique().tolist())
+      if not final_df.empty
+      else [],
   )
 
 

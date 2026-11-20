@@ -541,3 +541,9 @@ def run_catchup_sync(
         _sync_lock.release()
 
     return sync_status
+
+
+if __name__ == "__main__":
+    result = run_catchup_sync(bypass_cooldown=True)
+    if result["status"] == "failed":
+        raise SystemExit(1)

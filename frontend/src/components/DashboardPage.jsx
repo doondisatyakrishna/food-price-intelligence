@@ -200,6 +200,9 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
     );
   };
 
+  const formatPerKg = (pricePerQtl) =>
+    `₹${(Number(pricePerQtl) / 100).toFixed(2)}/kg`;
+
   return (
     <main className="container" style={{ paddingTop: '1.2rem', paddingBottom: '3.5rem' }}>
       {/* 1. Control & Filter Bar */}
@@ -285,22 +288,28 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
             </span>
           </div>
           <div className="mono" style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-forest)', margin: '0.4rem 0', opacity: isSimulating ? 0.55 : 1 }}>
-            {!forecast ? '...' : `₹${forecast.current_modal_price_inr.toLocaleString('en-IN')}`}
+            {!forecast ? '...' : `₹${forecast.current_modal_price_inr.toLocaleString('en-IN')}/Qtl`}
           </div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-            Per Quintal (100 kg) • {selectedRegion}
+          <div className="mono" style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--emerald-primary)', marginBottom: '0.25rem' }}>
+            {!forecast ? '' : formatPerKg(forecast.current_modal_price_inr)}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+            1 Quintal = 100 kg • {selectedRegion}
           </div>
         </div>
 
         <div className="glass-panel" style={{ padding: '1.35rem 1.5rem' }}>
           <div style={{ fontSize: '0.76rem', color: 'var(--emerald-primary)', fontWeight: 800 }}>7-DAY ML FORECAST</div>
           <div className="mono" style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-forest)', margin: '0.4rem 0', opacity: isSimulating ? 0.55 : 1 }}>
-            {!pred7d ? '...' : `₹${pred7d.predicted_price_inr.toLocaleString('en-IN')}`}
+            {!pred7d ? '...' : `₹${pred7d.predicted_price_inr.toLocaleString('en-IN')}/Qtl`}
+          </div>
+          <div className="mono" style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--emerald-primary)', marginBottom: '0.25rem' }}>
+            {!pred7d ? '' : `${formatPerKg(pred7d.predicted_price_inr)} (MAE ±₹${(pred7d.model_mae_inr / 100).toFixed(2)}/kg)`}
           </div>
           {pred7d && (
             <div style={{ fontSize: '0.82rem', fontWeight: 700, color: pred7d.expected_change_pct >= 0 ? '#059669' : '#dc2626', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
               {pred7d.expected_change_pct >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
-              <span>{pred7d.expected_change_pct >= 0 ? '+' : ''}{pred7d.expected_change_pct}% (MAE ±₹{pred7d.model_mae_inr})</span>
+              <span>{pred7d.expected_change_pct >= 0 ? '+' : ''}{pred7d.expected_change_pct}% vs. current</span>
             </div>
           )}
         </div>
@@ -308,12 +317,15 @@ export default function DashboardPage({ catalog, onTelemetry, syncCompletedAt })
         <div className="glass-panel" style={{ padding: '1.35rem 1.5rem' }}>
           <div style={{ fontSize: '0.76rem', color: 'var(--emerald-primary)', fontWeight: 800 }}>14-DAY ML FORECAST</div>
           <div className="mono" style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-forest)', margin: '0.4rem 0', opacity: isSimulating ? 0.55 : 1 }}>
-            {!pred14d ? '...' : `₹${pred14d.predicted_price_inr.toLocaleString('en-IN')}`}
+            {!pred14d ? '...' : `₹${pred14d.predicted_price_inr.toLocaleString('en-IN')}/Qtl`}
+          </div>
+          <div className="mono" style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--emerald-primary)', marginBottom: '0.25rem' }}>
+            {!pred14d ? '' : `${formatPerKg(pred14d.predicted_price_inr)} (MAE ±₹${(pred14d.model_mae_inr / 100).toFixed(2)}/kg)`}
           </div>
           {pred14d && (
             <div style={{ fontSize: '0.82rem', fontWeight: 700, color: pred14d.expected_change_pct >= 0 ? '#059669' : '#dc2626', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
               {pred14d.expected_change_pct >= 0 ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
-              <span>{pred14d.expected_change_pct >= 0 ? '+' : ''}{pred14d.expected_change_pct}% (MAE ±₹{pred14d.model_mae_inr})</span>
+              <span>{pred14d.expected_change_pct >= 0 ? '+' : ''}{pred14d.expected_change_pct}% vs. current</span>
             </div>
           )}
         </div>

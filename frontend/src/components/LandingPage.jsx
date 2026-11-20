@@ -57,7 +57,14 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
     (acc, item) => acc + (item.trading_days || 0),
     0
   );
-  const model14dEdge = catalog?.model_metrics?.['14d']?.improvement_pct;
+  const metrics7d = catalog?.model_metrics?.['7d'];
+  const metrics14d = catalog?.model_metrics?.['14d'];
+  const accuracy7d =
+    metrics7d?.mape_pct != null ? (100 - metrics7d.mape_pct).toFixed(1) : null;
+  const accuracy14d =
+    metrics14d?.mape_pct != null ? (100 - metrics14d.mape_pct).toFixed(1) : null;
+  const mae7dPerKg =
+    metrics7d?.mae_inr != null ? (metrics7d.mae_inr / 100).toFixed(2) : null;
 
   return (
     <main className="container" style={{ paddingTop: '2rem', paddingBottom: '4rem' }}>
@@ -188,7 +195,7 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
 
           <div className="neo-inset" style={{ padding: '1.1rem 1.25rem' }}>
             <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 700 }}>
-              14-DAY FORECAST EDGE
+              ML FORECAST ACCURACY
             </div>
             <div
               className="mono"
@@ -199,10 +206,16 @@ export default function LandingPage({ onLaunchDashboard, catalog, syncStatus }) 
                 marginTop: '0.2rem',
               }}
             >
-              {model14dEdge != null ? `+${model14dEdge}%` : '—'}
+              {accuracy7d != null ? `${accuracy7d}%` : '—'}
+              <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                {' '}
+                (7d)
+              </span>
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-              Out-of-time MAE gain vs. baseline
+              {accuracy14d != null
+                ? `14d: ${accuracy14d}%${mae7dPerKg != null ? ` • MAE ±₹${mae7dPerKg}/kg` : ''}`
+                : 'Out-of-time test accuracy'}
             </div>
           </div>
         </div>
