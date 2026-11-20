@@ -85,3 +85,24 @@ def test_sync_error_never_exposes_api_key():
     except RuntimeError as err:
       assert fake_secret not in str(err)
       assert "Connection refused" in str(err)
+
+def test_sync_requires_key_when_configured(monkeypatch):
+  monkeypatch.setenv("SYNC_API_KEY", "test-secret-sync-token")
+  resp_no_key = client.post("/api/sync")
+  assert resp_no_key.status_code == 401
+
+  resp_wrong_key = client.post(
+      "/api/sync", headers={"X-Sync-Key": "wrong-token"}
+  )
+  assert resp_wrong_key.status_code == 401
+
+
+def test_cors_blocks_unlisted_origin():
+  resp = client.options(
+      "/api/catalog",
+      headers={
+          "Origin": "https://evil-site.example.com",
+          "Access-Control-Request-Method": "GET",
+      },
+  )
+  assert resp.headers.get("access-control-allow-origin") is None

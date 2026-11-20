@@ -8,7 +8,9 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+import hmac
 
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -59,11 +61,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_DEFAULT_ORIGINS = [
+    "https://agropulse-india.onrender.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+_env_origins = os.getenv("ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _env_origins.split(",") if o.strip()]
+    if _env_origins.strip()
+    else _DEFAULT_ORIGINS
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Sync-Key"],
 )
 
 # Sliding-window rate limiter (90 req/min per IP) with stale-IP pruning
@@ -361,7 +377,15 @@ def forecast_endpoint(req: ForecastRequest):
 
 
 @app.post("/api/sync")
-def trigger_sync():
+def trigger_sync(x_sync_key: str | None = Header(default=None)):
+  expected_key = os.getenv("SYNC_API_KEY", "").strip()
+  if expected_key:
+    if not x_sync_key or not hmac.compare_digest(x_sync_key, expected_key):
+      raise HTTPException(
+          status_code=401,
+          detail="Unauthorized: valid X-Sync-Key header required to trigger sync.",
+      )
+
   status = get_sync_status()
   if status["is_syncing"]:
     return {
@@ -386,7 +410,6 @@ def trigger_sync():
       "message": "Background catch-up sync triggered.",
       "status": {**status, "is_syncing": True},
   }
-
 
 @app.get("/api/sync/status")
 def sync_status_endpoint():
