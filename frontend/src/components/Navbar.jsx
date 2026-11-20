@@ -104,7 +104,7 @@ export default function Navbar({
           {syncStatus?.live_sync_disabled ? (
             <span
               className="badge-pill"
-              title="Database & ML models update automatically every Sunday via GitHub Actions"
+              title="Database updates daily; ML models retrain Sundays via GitHub Actions"
               style={{
                 fontSize: '0.72rem',
                 fontWeight: 700,
@@ -115,7 +115,7 @@ export default function Navbar({
                 whiteSpace: 'nowrap',
               }}
             >
-              Auto-Sync: Sundays
+              Auto-Sync: Daily
             </span>
           ) : (
             <button
