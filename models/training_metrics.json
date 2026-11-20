@@ -8,10 +8,10 @@
     "test_end": "2026-07-24"
   },
   "14d": {
-    "mae_inr": 961.79,
-    "mape_pct": 25.6,
+    "mae_inr": 927.52,
+    "mape_pct": 25.19,
     "baseline_mae_inr": 934.14,
-    "improvement_pct": -2.96,
+    "improvement_pct": 0.71,
     "test_start": "2025-11-17",
     "test_end": "2026-07-17"
   }

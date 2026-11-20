@@ -79,6 +79,7 @@ def build_model_pipeline(horizon_days: int = 7) -> Pipeline:
     regressor = HistGradientBoostingRegressor(
         loss="absolute_error",
         max_iter=200,
+        max_depth=4,
         learning_rate=0.03,
         max_leaf_nodes=15,
         min_samples_leaf=60,
@@ -123,13 +124,15 @@ def train_and_evaluate_horizon(df: pd.DataFrame, horizon_days: int):
       valid_df[target_col] - valid_df["median_modal_price"]
   ) / valid_df["median_modal_price"]
 
-  # Clip extreme single-week data entry typos (> +250% or < -80%) during training only
-  # so outliers don't distort tree splits, while keeping test evaluation untouched
+  # Clip extreme returns during training only, keeping test evaluation untouched.
   split_date = valid_df["date"].quantile(0.80)
   embargo_cutoff = split_date - pd.Timedelta(days=horizon_days)
 
   train_df = valid_df[valid_df["date"] < embargo_cutoff].copy()
-  train_df = train_df[train_df["target_return"].between(-0.80, 2.50)]
+  if horizon_days >= 14:
+    train_df = train_df[train_df["target_return"].between(-0.60, 1.00)]
+  else:
+    train_df = train_df[train_df["target_return"].between(-0.80, 2.50)]
 
   test_df = valid_df[valid_df["date"] >= split_date].copy()
 
@@ -154,7 +157,15 @@ def train_and_evaluate_horizon(df: pd.DataFrame, horizon_days: int):
 
   # 3. Fit the ML pipeline
   pipeline = build_model_pipeline(horizon_days=horizon_days)
-  pipeline.fit(X_train, y_train_return)
+  # Weight samples so high-priced commodities (e.g., Dry Chillies) aren't
+  # drowned out by low-priced vegetables during L1 return optimization
+  if horizon_days >= 14:
+    sample_weights = np.sqrt(train_df["median_modal_price"].values)
+    pipeline.fit(
+        X_train, y_train_return, model__sample_weight=sample_weights
+    )
+  else:
+    pipeline.fit(X_train, y_train_return)
 
   # 4. Predict future return and convert back to ₹/Quintal
   pred_return = pipeline.predict(X_test)

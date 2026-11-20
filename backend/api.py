@@ -34,6 +34,11 @@ from backend.weather_service import (
 logger = logging.getLogger("agropulse")
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
+LIVE_SYNC_DISABLED = os.getenv("DISABLE_LIVE_SYNC", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 
 def _delayed_startup_sync() -> None:
@@ -46,11 +51,14 @@ def _delayed_startup_sync() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   load_ml_models()
-  startup_timer = threading.Timer(45.0, _delayed_startup_sync)
-  startup_timer.daemon = True
-  startup_timer.start()
+  startup_timer = None
+  if not LIVE_SYNC_DISABLED:
+    startup_timer = threading.Timer(45.0, _delayed_startup_sync)
+    startup_timer.daemon = True
+    startup_timer.start()
   yield
-  startup_timer.cancel()
+  if startup_timer is not None:
+    startup_timer.cancel()
   clear_ml_models()
 
 
@@ -378,6 +386,16 @@ def forecast_endpoint(req: ForecastRequest):
 
 @app.post("/api/sync")
 def trigger_sync(x_sync_key: str | None = Header(default=None)):
+  if LIVE_SYNC_DISABLED:
+    return {
+        "started": False,
+        "message": (
+            "Live sync is disabled on this server; data updates automatically"
+            " every Sunday via GitHub Actions."
+        ),
+        "status": get_sync_status(),
+    }
+
   expected_key = os.getenv("SYNC_API_KEY", "").strip()
   if expected_key:
     if not x_sync_key or not hmac.compare_digest(x_sync_key, expected_key):

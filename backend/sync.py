@@ -188,6 +188,11 @@ def sync_weather_gap(session, today: date) -> int:
           f"&timezone=Asia/Kolkata"
       )
       resp = requests.get(arch_url, timeout=25)
+      if resp.status_code == 429:
+        raise RuntimeError(
+            "Open-Meteo rate limit reached on shared cloud IP (scheduled GitHub"
+            " Actions sync will update weather)"
+        )
       resp.raise_for_status()
       daily = resp.json().get("daily", {})
       for i, d_str in enumerate(daily.get("time", [])):
@@ -213,6 +218,11 @@ def sync_weather_gap(session, today: date) -> int:
         f"&timezone=Asia/Kolkata&past_days={min(gap_days, 90)}&forecast_days=1"
     )
     resp = requests.get(recent_url, timeout=20)
+    if resp.status_code == 429:
+      raise RuntimeError(
+          "Open-Meteo rate limit reached on shared cloud IP (scheduled GitHub"
+          " Actions sync will update weather)"
+      )
     resp.raise_for_status()
     daily = resp.json().get("daily", {})
     for i, d_str in enumerate(daily.get("time", [])):
