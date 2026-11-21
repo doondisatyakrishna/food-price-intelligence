@@ -1,4 +1,4 @@
-# AgroPulse India — Agricultural Mandi Price Intelligence & Early-Warning System
+[# AgroPulse India — Agricultural Mandi Price Intelligence & Early-Warning System
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Render-059669?style=for-the-badge)](https://agropulse-india.onrender.com)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -124,4 +124,6 @@ Open **`http://127.0.0.1:8000`** in your browser to view the dashboard.
 ## Data Sources
 
 * **Agricultural Market Prices:** Open Government Data (OGD) Platform India (`data.gov.in`) — Agmarknet Daily Mandi Price Arrivals.
-* **Historical & 14-Day Forecast Weather:** [Open-Meteo](https://open-meteo.com/) Historical Archive & Forecast APIs.
+* **Historical & 14-Day Forecast Weather:** [Open-Meteo](https://open-meteo.com/) Historical Archive & Forecast APIs.](https://agropulse-india.onrender.com
+
+)
