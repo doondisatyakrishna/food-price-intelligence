@@ -1,100 +1,73 @@
-[# AgroPulse India — Agricultural Mandi Price Intelligence & Early-Warning System
+# AgroPulse India — Agricultural Commodity Price Intelligence
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Render-059669?style=for-the-badge)](https://agropulse-india.onrender.com)
-[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-10b981?style=for-the-badge&logo=react&logoColor=white)](https://react.dev/)
-[![Automated Sync](https://img.shields.io/badge/Data%20Sync-GitHub%20Actions-065f46?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/doondisatyakrishna/food-price-intelligence/actions)
+**Live Dashboard:** [https://agropulse-india.onrender.com](https://agropulse-india.onrender.com)
 
-**AgroPulse India** is a full-stack agricultural market intelligence and price forecasting platform built to track APMC mandi prices, detect abnormal price surges, and model weather-driven supply shocks across key Indian horticultural hubs.
-
-**Live Application:** [https://agropulse-india.onrender.com](https://agropulse-india.onrender.com)
+AgroPulse India is an end-to-end agricultural commodity price forecasting and early-warning platform focused on **Andhra Pradesh and Telangana**. It combines daily Agmarknet mandi quotes with observed weather data to generate **7-day and 14-day price forecasts** (`₹/kg`) and **30-day Z-score surge alerts** across state-wide and district-level hubs.
 
 ---
 
-## Key Capabilities
+## Key Features
 
-* **7-Day & 14-Day ML Price Forecasting:** Predicts forward modal prices (`₹/Quintal`) using `joblib`-serialized scikit-learn gradient boosting pipelines trained on lagged price momentum, 30-day rolling volatility, 21-day cumulative rainfall lags, and cyclical day-of-year seasonality.
-* **30-Day Surge Early-Warning Engine:** Classifies real-time market conditions into `NORMAL`, `WATCH` ($Z \ge 1.5\sigma$), and `CRITICAL_SURGE` ($Z \ge 2.0\sigma$) based on rolling 30-day volatility Z-scores.
-* **Interactive "What-If" Weather & Supply Shock Simulator:** Isolated 60 FPS neomorphic range sliders (`calculate-on-release`) that simulate 21-day cumulative rainfall anomalies (`-50 mm` dry spell to `+200 mm` cyclone rain) and immediate mandi price shocks (`-25%` bumper glut to `+40%` supply crunch) in memory without mutating stored data.
-* **14-Day Sub-Regional Meteorological Outlook:** Live weather forecasts via the Open-Meteo API across **6 Indian agro-climatic hubs** (*Coastal Andhra, Rayalaseema, North Telangana, South Telangana, Nashik, and Kolar*), flagging heavy rainfall days ($\ge 25\text{ mm}$) with automatic fallback to historical SQLite baselines.
-* **District & APMC Mandi Price Leaderboard:** Ranks individual APMC markets by modal price realization on the latest reporting date, displaying intraday min-to-max price positioning and inter-mandi price spreads (`₹/Qtl`).
-* **12-Month Seasonal Harvest & Arrival Cycle:** Visualizes commodity-specific Rabi/Kharif sowing, lean, and peak arrival windows alongside historical price and precipitation trajectories.
-* **Automated Weekly Data Synchronization:** Scheduled Sunday GitHub Actions workflow ingests fresh mandi arrivals from `data.gov.in` (Agmarknet) and regional weather observations from Open-Meteo, rebuilds engineered features atomically, and commits the updated SQLite database.
+* **Regional Coverage:** Tracks **21 regions** (`Andhra Pradesh`, `Telangana`, and **19 individual districts** including Guntur, Chittoor, Kurnool, Hyderabad, Karimnagar, East Godavari, and more) across **119 qualified commodity-region series** (~18,100 mandi price records).
+* **7-Day & 14-Day ML Forecasts:** Separate `HistGradientBoostingRegressor` pipelines trained on percentage returns with L1 (`absolute_error`) loss, chronological out-of-time validation, and price-weighted 14-day training to prevent low-priced vegetables from drowning out high-value crops like Dry Chillies.
+* **Weather-Aware Feature Engineering:** Integrates Open-Meteo temperature anomalies and lagged rainfall accumulations (`7d`, `14d`, and `21d` lags) alongside rolling price moving averages, momentum, and intraday spreads.
+* **Surge Early-Warning System:** Flags commodities as `NORMAL`, `WATCH` (Z-score $\ge$ 1.5), or `CRITICAL_SURGE` (Z-score $\ge$ 2.0) relative to their 30-day rolling price distribution.
+* **Zero-Maintenance Automated Pipeline:** A daily GitHub Actions workflow syncs fresh mandi prices and weather every morning at **7:30 AM IST** and retrains both ML models every **Sunday**, pushing updated artifacts for automatic Render redeployment.
 
 ---
 
-## Modular Architecture
+## Model Performance (Out-of-Time Test Split)
+
+Evaluated strictly on future unseen dates against a persistence baseline (assuming price remains unchanged):
+
+| Horizon | Baseline MAE (₹/Qtl) | HistGBM MAE (₹/Qtl) | MAE Gain | Baseline MAPE | HistGBM MAPE |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **7-Day Forecast** | ₹928.75 | **₹901.24** | **+2.96%** | 25.17% | **23.96%** |
+| **14-Day Forecast** | ₹934.14 | **₹927.52** | **+0.71%** | 26.28% | **25.19%** |
+
+*Core commodity 14-day highlights: **Tomato** (+12.81% MAE gain), **Dry Chillies** (+5.77% MAE gain).*
+
+---
+
+## Architecture
 
 ```text
-food-price-intelligence/
-├── .github/
-│   └── workflows/                  # Weekly Sunday automated DB sync workflow
-├── backend/
-│   ├── api.py                      # Slim FastAPI gateway, rate limiter, JSON error handlers & SPA host
-│   ├── db.py                       # SQLite WAL connection, 15s busy_timeout & in-memory TTL cache
-│   ├── ml_service.py               # Joblib model bundle unwrapper & 7d/14d What-If inference engine
-│   ├── weather_service.py          # 6 agro-climatic hubs, Open-Meteo client & SQLite fallback
-│   ├── sync_manager.py             # Thread-safe sync state tracker & 10-minute cooldown guard
-│   ├── sync.py                     # data.gov.in (Agmarknet) & Open-Meteo ETL ingestion pipeline
-│   └── features.py                 # Atomic rolling/lag feature engineering pipeline
-├── data/
-│   └── food_price_intelligence.db  # Zero-config local SQLite database (WAL mode)
-├── frontend/
-│   ├── public/
-│   │   └── favicon.png             # Custom AgroPulse India branding
-│   └── src/
-│       ├── api.js                  # REST client with 25s timeout & automatic 502/503 cold-start retry
-│       ├── index.css               # Emerald neo-glassmorphic design system & custom sliders
-│       └── components/
-│           ├── DashboardPage.jsx
-│           └── dashboard/
-│               ├── WhatIfSimulator.jsx      # Isolated 60 FPS calculate-on-release sliders
-│               ├── PriceTrajectoryChart.jsx # Memoized Recharts price & rainfall chart
-│               ├── WeatherOutlookCard.jsx   # Sub-regional 14-day weather card
-│               ├── CropCalendarCard.jsx     # 12-month seasonal crop arrival grid
-│               └── MandiLeaderboard.jsx     # Full-width horizontal APMC leaderboard
-├── models/
-│   ├── price_forecaster_7d.joblib
-│   ├── price_forecaster_14d.joblib
-│   └── training_metrics.json
-├── render.yaml                     # Single-service Render build & start configuration
-└── requirements.txt
+data.gov.in (Agmarknet) + Open-Meteo API
+                 │
+                 ▼  (Daily 07:30 IST via GitHub Actions)
+    backend/sync.py  ──►  SQLite (data/food_price_intelligence.db)
+                 │
+                 ▼
+    backend/features.py  ──►  engineered_features (16,173 rows)
+                 │
+                 ▼  (Weekly Sunday Retrain)
+    backend/train.py  ──►  models/price_forecaster_{7d,14d}.joblib
+                 │
+                 ▼  (Auto-deploy to Render, DISABLE_LIVE_SYNC=true)
+    FastAPI (backend/api.py)  ◄──►  React + Vite SPA (frontend/)
 ```
 
 ---
 
-## Production Engineering Highlights
+## Tech Stack
 
-* **Zero-Cost, Single-Service Deployment:** FastAPI serves both the REST API and the compiled React (`frontend/dist`) static bundle from a single Render web service backed by an embedded SQLite database—requiring no external database server.
-* **512 MB Memory Optimization:** Defers background catch-up sync by 45 seconds after container boot, runs explicit garbage collection (`gc.collect()`), and uses SQLite `WAL` mode with atomic `DELETE` + `INSERT` feature refreshes so live user queries never collide with background ETL writes.
-* **Cold-Start & Upstream Resilience:** Frontend API requests automatically retry transient `502`/`503`/`504` wake-up responses, while the weather service falls back gracefully to cached or observed SQLite records if external weather endpoints throttle shared cloud IPs.
-
----
-
-## API Reference
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/health` | Returns database connectivity, loaded ML model status, worker PID, and sync state. |
-| `GET` | `/api/catalog` | Lists tracked regions, commodities, date spans, weather hubs, and model MAE metrics. |
-| `GET` | `/api/history` | Fetches historical modal prices, 7d/30d moving averages, and daily rainfall (`limit` up to `1500`). |
-| `POST` | `/api/forecast` | Runs 7-day and 14-day ML inference with optional `rain_21d_delta_mm` and `price_shock_pct` overrides. |
-| `GET` | `/api/weather-forecast` | Returns a 14-day meteorological outlook and heavy-rain risk flags for a selected agro-climatic hub. |
-| `GET` | `/api/mandis` | Returns the APMC mandi price leaderboard and inter-mandi price spread (`₹/Qtl`). |
-| `GET` | `/api/alerts` | Lists active `CRITICAL_SURGE` and `WATCH` commodities ranked by 30-day volatility Z-score. |
-| `POST` | `/api/sync` | Triggers a background catch-up ETL sync (protected by a 10-minute cooldown). |
+* **Backend & ML:** Python, FastAPI, SQLite, Pandas, NumPy, scikit-learn (`HistGradientBoostingRegressor`), Joblib
+* **Frontend:** React, Vite, Recharts, Lucide Icons
+* **Automation & Hosting:** GitHub Actions (daily data sync + weekly retraining), Render (web hosting)
+* **Testing:** `pytest` (security, SPA path traversal, input validation, and sync status regression tests)
 
 ---
 
-## Local Setup & Development
+## Local Development Setup
 
 ### 1. Clone & Install Backend Dependencies
+
 ```bash
 git clone [https://github.com/doondisatyakrishna/food-price-intelligence.git](https://github.com/doondisatyakrishna/food-price-intelligence.git)
 cd food-price-intelligence
 
 python -m venv .venv
-# Windows PowerShell:
+# Windows (PowerShell):
 .venv\Scripts\Activate.ps1
 # macOS / Linux:
 # source .venv/bin/activate
@@ -102,28 +75,61 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment Variables (Optional for Live `data.gov.in` Sync)
-Create a `.env` file in the project root if you want to run live `data.gov.in` Agmarknet ingestion locally:
+### 2. Configure Environment Variables
+
+Create a `.env` file in the project root:
+
 ```env
 DATA_GOV_API_KEY=your_data_gov_in_api_key
+# Optional: protect POST /api/sync
+SYNC_API_KEY=your_optional_sync_secret
+# Set to true in production (Render) to rely on GitHub Actions sync
+DISABLE_LIVE_SYNC=false
 ```
 
-### 3. Build the Frontend & Start the Server
+### 3. Run the Data & ML Pipeline (Optional)
+
+The repository already ships with the latest SQLite database and trained `.joblib` artifacts. To refresh data and retrain locally:
+
 ```bash
+python -m backend.sync
+python -m backend.features
+python -m backend.train
+```
+
+### 4. Start the Backend & Frontend
+
+```bash
+# Terminal 1 — FastAPI backend ([http://127.0.0.1:8000](http://127.0.0.1:8000))
+uvicorn backend.api:app --reload
+
+# Terminal 2 — React + Vite frontend (http://localhost:5173)
 cd frontend
 npm install
-npm run build
-cd ..
-
-uvicorn backend.api:app --host 127.0.0.1 --port 8000
+npm run dev
 ```
-Open **`http://127.0.0.1:8000`** in your browser to view the dashboard.
 
 ---
 
-## Data Sources
+## Testing & Verification
 
-* **Agricultural Market Prices:** Open Government Data (OGD) Platform India (`data.gov.in`) — Agmarknet Daily Mandi Price Arrivals.
-* **Historical & 14-Day Forecast Weather:** [Open-Meteo](https://open-meteo.com/) Historical Archive & Forecast APIs.](https://agropulse-india.onrender.com
+```bash
+# Backend security & regression tests
+python -m pytest -v
 
-)
+# Commodity & district 14-day error diagnostics
+python -m backend.eval_commodities
+
+# Frontend lint & production build
+cd frontend
+npm run lint
+npm run build
+```
+
+---
+
+## Production Security & Reliability
+
+* **Read-Only Cloud Runtime:** Render runs with `DISABLE_LIVE_SYNC=true` to avoid shared cloud-IP rate limits (`429`) from Open-Meteo and connection blocks from `data.gov.in`.
+* **Restricted CORS & Auth:** Origins are allowlisted via `ALLOWED_ORIGINS`, and `POST /api/sync` supports constant-time `X-Sync-Key` validation.
+* **Hardened Serving:** SPA static file serving blocks path traversal, API keys are scrubbed from error responses, and missing ML artifacts fail cleanly with `503`.
